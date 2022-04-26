@@ -29,7 +29,7 @@
         "framer-motion": "^4.1.11",
         "mobx": "^6.3.9",
         "mobx-react": "^7.2.1",
-        "moment": "^2.29.1",
+        "moment": "^2.29.2",
         "monaco-editor": "^0.31.1",
         "monaco-proto-lint": "0.0.1",
         "monaco-yaml": "^3.2.1",
