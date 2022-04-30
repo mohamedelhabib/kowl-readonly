@@ -1,0 +1,63 @@
+name: Build & Push Docker Image
+
+on:
+  push:
+    branches:
+      - master
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@master
+
+      - name: Extract ref/branch name
+        shell: bash
+        run: echo "##[set-output name=ref;]$(echo ${GITHUB_REF##*/})"
+        id: extract_ref
+
+      - name: Set timestamp
+        shell: bash
+        run: echo "::set-output name=time::$(date +%s)"
+        id: set_timestamp
+
+      - name: Generate docker version
+        shell: bash
+        run: echo "::set-output name=time::$(git show -s --date='format-local:%Y%m.%d.%H%M%S' --format='%cd')"
+        id: docker_version
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v3
+        with:
+          # list of Docker images to use as base name for tags
+          images: |
+            mohamedelhabib/kowl-readonly
+          # generate Docker tags based on the following events/attributes
+          tags: |
+            type=sha,format=long
+            type=raw,value=${{ steps.docker_version.outputs.time }}
+
+      # Use Buildx with moby/buildkit to utilize registry caching and more 
+      # advanced building techniques (e.g. concurrent multistage builds)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+        with:
+          driver-opts: image=moby/buildkit:v0.9.0,network=host
+
+      - name: Build and push Docker Image
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          push: true
+          build-args: |
+            KOWL_GIT_SHA=${{ github.sha }}
+            KOWL_GIT_REF=${{ steps.extract_ref.outputs.ref }}
+            KOWL_TIMESTAMP=${{ steps.set_timestamp.outputs.time }}
+            BUILT_FROM_PUSH=${{ github.event.action != 'published' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
