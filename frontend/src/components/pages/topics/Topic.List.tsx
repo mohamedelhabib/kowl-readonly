@@ -9,15 +9,15 @@
  * by the Apache License, Version 2.0
  */
 
-import React, { FC, useRef, useState } from 'react';
+import React, { FC } from 'react';
 import { autorun, IReactionDisposer, makeObservable, observable } from 'mobx';
 import { observer } from 'mobx-react';
 import { appGlobal } from '../../../state/appGlobal';
 import { api } from '../../../state/backendApi';
-import { Topic, TopicAction, TopicActions, TopicConfigEntry } from '../../../state/restInterfaces';
+import { Topic, TopicActions, TopicConfigEntry } from '../../../state/restInterfaces';
 import { uiSettings } from '../../../state/ui';
 import { editQuery } from '../../../utils/queryHelper';
-import { Code, DefaultSkeleton, QuickTable } from '../../../utils/tsxUtils';
+import { DefaultSkeleton, QuickTable } from '../../../utils/tsxUtils';
 import { renderLogDirSummary } from '../../misc/common';
 import { PageComponent, PageInitHelper } from '../Page';
 import { CheckIcon, CircleSlashIcon, EyeClosedIcon } from '@primer/octicons-react';
@@ -31,26 +31,11 @@ import {
 import Section from '../../misc/Section';
 import PageContent from '../../misc/PageContent';
 import {
-    Alert,
-    AlertDialog,
-    AlertDialogBody,
-    AlertDialogContent,
-    AlertDialogFooter,
-    AlertDialogHeader,
-    AlertDialogOverlay,
-    AlertIcon,
     Box,
-    Button,
-    Checkbox,
     DataTable,
     Flex,
-    Icon,
-    Popover,
-    Text,
-    Tooltip,
-    useToast
+    Popover
 } from '@redpanda-data/ui';
-import { HiOutlineTrash } from 'react-icons/hi';
 import { Statistic } from '../../misc/Statistic';
 import { Link } from 'react-router-dom';
 import SearchBar from '../../misc/SearchBar';
@@ -155,47 +140,17 @@ class TopicList extends PageComponent {
                     />
                 </Box>
                 <Section>
-                    <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center' }}>
-                        <Button
-                            variant="solid"
-                            colorScheme="brand"
-                            onClick={() => this.showCreateTopicModal()}
-                            style={{ minWidth: '160px', marginBottom: '12px' }}
-                        >
-                            Create topic
-                        </Button>
-
-                        <Checkbox
-                            isChecked={!uiSettings.topicList.hideInternalTopics}
-                            onChange={x => uiSettings.topicList.hideInternalTopics = !x.target.checked}
-                            style={{ marginLeft: 'auto' }}>
-                            Show internal topics
-                        </Checkbox>
-
-                        <this.CreateTopicModal />
-                    </div>
                     <Box my={4}>
-                        <TopicsTable topics={topics} onDelete={(record) => {
-                            this.topicToDelete = record;
-                        }} />
+                        <TopicsTable topics={topics} />
                     </Box>
                 </Section>
-
-                <ConfirmDeletionModal
-                    topicToDelete={this.topicToDelete}
-                    onCancel={() => (this.topicToDelete = null)}
-                    onFinish={() => {
-                        this.topicToDelete = null;
-                        this.refreshData(true);
-                    }}
-                />
             </PageContent>
         );
     }
 }
 export default TopicList;
 
-const TopicsTable: FC<{ topics: Topic[], onDelete: (record: Topic) => void }> = ({ topics, onDelete }) => {
+const TopicsTable: FC<{ topics: Topic[] }> = ({ topics }) => {
     const paginationParams = usePaginationParams(uiSettings.topicList.pageSize, topics.length)
 
     return (
@@ -234,24 +189,6 @@ const TopicsTable: FC<{ topics: Topic[], onDelete: (record: Topic) => void }> = 
                     header: 'Size',
                     accessorKey: 'logDirSummary.totalSizeBytes',
                     cell: ({row: {original: topic}}) => renderLogDirSummary(topic.logDirSummary),
-                },
-                {
-                    id: 'action',
-                    header: '',
-                    cell: ({row: {original: record}}) => (
-                        <Flex gap={1}>
-                            <DeleteDisabledTooltip topic={record}>
-                                <button
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        onDelete(record)
-                                    }}
-                                >
-                                    <Icon as={HiOutlineTrash} />
-                                </button>
-                            </DeleteDisabledTooltip>
-                        </Flex>
-                    ),
                 },
             ]}
         />
@@ -318,105 +255,6 @@ const renderName = (topic: Topic) => {
         </Popover>
     );
 };
-
-function ConfirmDeletionModal({ topicToDelete, onFinish, onCancel }: { topicToDelete: Topic | null; onFinish: () => void; onCancel: () => void }) {
-    const [deletionPending, setDeletionPending] = useState(false);
-    const [error, setError] = useState<string | Error | null>(null);
-    const toast = useToast()
-    const cancelRef = useRef<HTMLButtonElement | null>(null)
-
-
-    const cleanup = () => {
-        setDeletionPending(false);
-        setError(null);
-    };
-
-    const finish = () => {
-        onFinish();
-        cleanup();
-
-        toast({
-            title: 'Topic Deleted',
-            description: <Text as="span">Topic <Code>{topicToDelete?.topicName}</Code> deleted successfully</Text>,
-            status: 'success',
-        })
-    };
-
-    const cancel = () => {
-        onCancel();
-        cleanup();
-    };
-
-    return (
-        <AlertDialog
-            isOpen={topicToDelete !== null}
-            leastDestructiveRef={cancelRef}
-            onClose={cancel}
-        >
-            <AlertDialogOverlay>
-                <AlertDialogContent>
-                    <AlertDialogHeader>
-                        Delete Topic
-                    </AlertDialogHeader>
-
-                    <AlertDialogBody>
-                        {error && <Alert status="error" mb={2}>
-                            <AlertIcon/>
-                            {`An error occurred: ${typeof error === 'string' ? error : error.message}`}
-                        </Alert>}
-                        {topicToDelete?.isInternal && <Alert status="error" mb={2}>
-                            <AlertIcon/>
-                            This is an internal topic, deleting it might have unintended side-effects!
-                        </Alert>}
-                        <Text>
-                            Are you sure you want to delete topic <Code>{topicToDelete?.topicName}</Code>?<br/>
-                            This action cannot be undone.
-                        </Text>
-                    </AlertDialogBody>
-
-                    <AlertDialogFooter>
-                        <Button ref={cancelRef} onClick={cancel} variant="ghost">
-                            Cancel
-                        </Button>
-                        <Button isLoading={deletionPending} colorScheme="brand" onClick={() => {
-                            setDeletionPending(true);
-                            api.deleteTopic(topicToDelete!.topicName) // modal is not shown when topic is null
-                                .then(finish)
-                                .catch(setError)
-                                .finally(() => {
-                                    setDeletionPending(false)
-                                });
-                        }} ml={3}>
-                            Delete
-                        </Button>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialogOverlay>
-        </AlertDialog>
-    )
-}
-
-function DeleteDisabledTooltip(props: { topic: Topic; children: JSX.Element }): JSX.Element {
-    const { topic } = props;
-    const deleteButton = props.children;
-
-    const wrap = (button: JSX.Element, message: string) => (
-        <Tooltip placement="left" label={message} hasArrow>
-            {React.cloneElement(button, {
-                disabled: true,
-                className: (button.props.className ?? '') + ' disabled',
-                onClick: undefined
-            })}
-        </Tooltip>
-    );
-
-    return <>{hasDeletePrivilege(topic.allowedActions) ? deleteButton : wrap(deleteButton, 'You don\'t have \'deleteTopic\' permission for this topic.')}</>;
-}
-
-function hasDeletePrivilege(allowedActions?: Array<TopicAction>) {
-    return Boolean(allowedActions?.includes('all') || allowedActions?.includes('deleteTopic'));
-}
-
 
 function makeCreateTopicModal(parent: TopicList) {
     api.refreshCluster(); // get brokers (includes configs) to display default values

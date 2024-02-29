@@ -15,7 +15,7 @@ import (
 )
 
 // DefaultMaxDeserializationPayloadSize is the maximum payload size deserialization responses.
-const DefaultMaxDeserializationPayloadSize = 20_480 // 20 KB
+const DefaultMaxDeserializationPayloadSize = 2048000 // 2000 KB
 
 // Console contains all configuration options for features that are generic,
 // such as documentation plumbing.

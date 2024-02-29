@@ -18,16 +18,13 @@ import { GroupDescription, GroupMemberDescription } from '../../../state/restInt
 import { action, computed, makeObservable, observable } from 'mobx';
 import { appGlobal } from '../../../state/appGlobal';
 import { CheckCircleTwoTone, FireTwoTone, HourglassTwoTone, QuestionCircleOutlined, WarningTwoTone } from '@ant-design/icons';
-import { Button, DefaultSkeleton, IconButton, numberToThousandsString, OptionGroup, QuickTable } from '../../../utils/tsxUtils';
+import { Button, DefaultSkeleton, numberToThousandsString, OptionGroup, QuickTable } from '../../../utils/tsxUtils';
 import { uiSettings } from '../../../state/ui';
-import { PencilIcon, TrashIcon } from '@heroicons/react/solid';
 import { DeleteOffsetsModal, EditOffsetsModal, GroupDeletingMode, GroupOffset } from './Modals';
 import { ShortNum } from '../../misc/ShortNum';
-import AclList from '../topics/Tab.Acl/AclList';
 import { SkipIcon } from '@primer/octicons-react';
 import { Accordion, DataTable, Empty, Flex, Popover, Section, Tabs, Tag, Text, Tooltip } from '@redpanda-data/ui';
 import PageContent from '../../misc/PageContent';
-import { Features } from '../../../state/supportedFeatures';
 import { Statistic } from '../../misc/Statistic';
 
 @observer
@@ -87,13 +84,6 @@ class GroupDetails extends PageComponent<{ groupId: string }> {
                     />
 
                     <span style={{ marginLeft: 'auto' }} />
-
-                    <Button variant="outline" onClick={() => this.editGroup()} disabledReason={cannotEditGroupReason(group)}>
-                        Edit Group
-                    </Button>
-                    <Button variant="outline" colorScheme="red" onClick={() => this.deleteGroup()} disabledReason={cannotDeleteGroupReason(group)}>
-                        Delete Group
-                    </Button>
                 </div>
 
                 {/* Main Content */}
@@ -157,11 +147,6 @@ class GroupDetails extends PageComponent<{ groupId: string }> {
                                 key: 'partitions',
                                 name: 'Partitions',
                                 component: this.renderPartitions(group)
-                            },
-                            {
-                                key: 'acl',
-                                name: 'ACL',
-                                component: <AclList acl={api.consumerGroupAcls.get(group.groupId)} />
                             }
                         ]}
                     />
@@ -264,19 +249,6 @@ class GroupByTopics extends Component<{
                             {/* EditButtons */}
                             <div style={{width: '2px'}}/>
 
-                            <IconButton onClick={e => {
-                                p.onEditOffsets(g.partitions);
-                                e.stopPropagation();
-                            }} disabledReason={cannotEditGroupReason(this.props.group)}>
-                                <PencilIcon/>
-                            </IconButton>
-                            <IconButton onClick={e => {
-                                p.onDeleteOffsets(g.partitions, 'topic');
-                                e.stopPropagation();
-                            }} disabledReason={cannotDeleteGroupOffsetsReason(this.props.group)}>
-                                <TrashIcon/>
-                            </IconButton>
-
                             <Flex ml={2} gap={1}>
                                 {/* InfoTags */}
                                 <Tooltip placement="top" label="Summed lag of all partitions of the topic" hasArrow>
@@ -334,19 +306,6 @@ class GroupByTopics extends Component<{
                             header: 'Lag',
                             accessorKey: 'lag',
                             cell: ({row: {original}}) => ShortNum({ value: original.lag, tooltip: true }) },
-                        {
-                            size: 1,
-                            header: '',
-                            id: 'action',
-                            cell: ({row: {original}}) => <Flex pr={2} gap={1}>
-                                <IconButton onClick={() => p.onEditOffsets([original])} disabledReason={cannotEditGroupReason(this.props.group)}>
-                                    <PencilIcon />
-                                </IconButton>
-                                <IconButton onClick={() => p.onDeleteOffsets([original], 'partition')} disabledReason={cannotDeleteGroupOffsetsReason(this.props.group)} >
-                                    <TrashIcon />
-                                </IconButton>
-                            </Flex>,
-                        },
                     ]}
                 />,
             }
@@ -530,23 +489,5 @@ const ProtocolType = (p: { group: GroupDescription }) => {
 
     return <Statistic title="Protocol" value={protocol} />;
 };
-
-function cannotEditGroupReason(group: GroupDescription): string | undefined {
-    if (group.noEditPerms) return 'You don\'t have \'editConsumerGroup\' permissions for this group';
-    if (group.isInUse) return 'Consumer groups with active members cannot be edited';
-    if (!Features.patchGroup) return 'This cluster does not support editting group offsets';
-}
-
-function cannotDeleteGroupReason(group: GroupDescription): string | undefined {
-    if (group.noDeletePerms) return 'You don\'t have \'deleteConsumerGroup\' permissions for this group';
-    if (group.isInUse) return 'Consumer groups with active members cannot be deleted';
-    if (!Features.deleteGroup) return 'This cluster does not support deleting groups';
-}
-
-function cannotDeleteGroupOffsetsReason(group: GroupDescription): string | undefined {
-    if (group.noEditPerms) return 'You don\'t have \'deleteConsumerGroup\' permissions for this group';
-    if (group.isInUse) return 'Consumer groups with active members cannot be deleted';
-    if (!Features.deleteGroupOffsets) return 'This cluster does not support deleting group offsets';
-}
 
 export default GroupDetails;

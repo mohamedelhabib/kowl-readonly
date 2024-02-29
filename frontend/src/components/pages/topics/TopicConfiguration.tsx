@@ -1,8 +1,7 @@
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { PencilIcon } from '@heroicons/react/solid';
 import { AdjustmentsIcon } from '@heroicons/react/outline';
 import { Alert, AlertDescription, AlertIcon, Box, Button, Flex, Grid, GridItem, Icon, Input, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, ModalOverlay,
-    PasswordInput, Popover, RadioGroup, SearchField, Text, Tooltip, useToast } from '@redpanda-data/ui';
+    PasswordInput, Popover, RadioGroup, SearchField, Text, useToast } from '@redpanda-data/ui';
 import { Observer, observer, useLocalObservable } from 'mobx-react';
 import { FC } from 'react';
 import { ConfigEntryExtended } from '../../../state/restInterfaces';
@@ -10,7 +9,6 @@ import { formatConfigValue } from '../../../utils/formatters/ConfigValueFormatte
 import { DataSizeSelect, DurationSelect, NumInput, RatioInput } from './CreateTopicModal/CreateTopicModal';
 import './TopicConfiguration.scss';
 import { api } from '../../../state/backendApi';
-import { isServerless } from '../../../config';
 import { SingleSelect } from '../../misc/Select';
 import { Label } from '../../../utils/tsxUtils';
 
@@ -233,7 +231,6 @@ const ConfigGroup = observer((p: { groupName?: string; onEditEntry: (configEntry
 });
 
 const ConfigEntry = observer((p: { onEditEntry: (configEntry: ConfigEntryExtended) => void; entry: ConfigEntryExtended; hasEditPermissions: boolean }) => {
-    const {canEdit, reason: nonEdittableReason} = isTopicConfigEdittable(p.entry, p.hasEditPermissions);
 
     const entry = p.entry;
     const friendlyValue = formatConfigValue(entry.name, entry.value, 'friendly');
@@ -249,16 +246,6 @@ const ConfigEntry = observer((p: { onEditEntry: (configEntry: ConfigEntryExtende
             <span className="spacer"></span>
 
             <span className="configButtons">
-                <Tooltip label={nonEdittableReason} placement="left" isDisabled={canEdit} hasArrow>
-                    <span
-                        className={'btnEdit' + (canEdit ? '' : ' disabled')}
-                        onClick={() => {
-                            if (canEdit) p.onEditEntry(p.entry);
-                        }}
-                    >
-                        <Icon as={PencilIcon}/>
-                    </span>
-                </Tooltip>
                 {entry.documentation && (
                     <Popover
                         hideCloseButton
@@ -299,23 +286,6 @@ const ConfigEntry = observer((p: { onEditEntry: (configEntry: ConfigEntryExtende
         </>
     );
 });
-
-function isTopicConfigEdittable(entry: ConfigEntryExtended, hasEditPermissions: boolean): { canEdit: boolean; reason?: string } {
-    if (!hasEditPermissions) return {canEdit: false, reason: 'You don\'t have permissions to change topic configuration entries'};
-
-    if (isServerless()) {
-        const edittableEntries = ['retention.ms', 'retention.bytes'];
-
-        if (edittableEntries.includes(entry.name)) {
-            return {canEdit: true};
-        }
-
-        return {canEdit: false, reason: 'This configuration is not editable on Serverless clusters'};
-    }
-
-    return {canEdit: true};
-}
-
 
 export const ConfigEntryEditor = observer((p: {
     entry: ConfigEntryExtended;

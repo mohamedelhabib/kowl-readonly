@@ -14,7 +14,7 @@ import { computed, makeObservable, observable } from 'mobx';
 import { observer } from 'mobx-react';
 import { appGlobal } from '../../../state/appGlobal';
 import { api } from '../../../state/backendApi';
-import { ConfigEntry, Topic, TopicAction } from '../../../state/restInterfaces';
+import { ConfigEntry, Topic } from '../../../state/restInterfaces';
 import { uiSettings } from '../../../state/ui';
 import { uiState } from '../../../state/uiState';
 import '../../../utils/arrayExtensions';
@@ -22,21 +22,14 @@ import { DefaultSkeleton } from '../../../utils/tsxUtils';
 import Tabs from '../../misc/tabs/Tabs';
 import { PageComponent, PageInitHelper } from '../Page';
 import { TopicQuickInfoStatistic } from './QuickInfo';
-import AclList from './Tab.Acl/AclList';
 import { TopicConfiguration } from './Tab.Config';
 import { TopicConsumers } from './Tab.Consumers';
-import { TopicDocumentation } from './Tab.Docu';
 import { TopicMessageView } from './Tab.Messages';
-import { TopicPartitions } from './Tab.Partitions';
-import { WarningOutlined } from '@ant-design/icons';
-import { LockIcon } from '@primer/octicons-react';
-import { AppFeatures } from '../../../utils/env';
 import Section from '../../misc/Section';
 import PageContent from '../../misc/PageContent';
-import { Button, Code, Popover, Result, Tooltip } from '@redpanda-data/ui';
-import { isServerless } from '../../../config';
+import { Button, Code, Result } from '@redpanda-data/ui';
 
-const TopicTabIds = ['messages', 'consumers', 'partitions', 'configuration', 'documentation', 'topicacl'] as const;
+const TopicTabIds = ['messages', 'consumers', 'configuration'] as const;
 export type TopicTabId = typeof TopicTabIds[number];
 
 // A tab (specifying title+content) that disable/lock itself if the user doesn't have some required permissions.
@@ -44,7 +37,6 @@ class TopicTab {
     constructor(
         public readonly topicGetter: () => Topic | undefined | null,
         public id: TopicTabId,
-        private requiredPermission: TopicAction,
         public titleText: string,
         private contentFunc: (topic: Topic) => React.ReactNode,
         private disableHooks?: ((topic: Topic) => React.ReactNode | undefined)[]
@@ -62,7 +54,7 @@ class TopicTab {
         if (!topic) return true; // no data yet
         if (!topic.allowedActions || topic.allowedActions[0] == 'all') return true; // Redpanda Console free version
 
-        return topic.allowedActions.includes(this.requiredPermission);
+        return false;
     }
 
     @computed get isDisabled(): boolean {
@@ -81,13 +73,7 @@ class TopicTab {
         }
 
         return (
-            1 && (
-                <Popover content={`You're missing the required permission '${this.requiredPermission}' to view this tab`} hideCloseButton={true}>
-                    <div>
-                        <LockIcon size={16} /> {this.titleText}
-                    </div>
-                </Popover>
-            )
+            1
         );
     }
 
@@ -108,43 +94,11 @@ class TopicDetails extends PageComponent<{ topicName: string }> {
 
         const topic = () => this.topic;
 
-        const mkDocuTip = (text: string, icon?: JSX.Element) => (
-            <Tooltip label={text} placement="left" hasArrow>
-                <span>{icon ?? null}Documentation</span>
-            </Tooltip>
-        );
-        const warnIcon = (
-            <span style={{ fontSize: '15px', marginRight: '5px', transform: 'translateY(1px)', display: 'inline-block' }}>
-                <WarningOutlined color="hsl(22deg 29% 85%)" />
-            </span>
-        );
         this.topicTabs = [
-            new TopicTab(topic, 'messages', 'viewMessages', 'Messages', (t) => <TopicMessageView topic={t} refreshTopicData={(force: boolean) => this.refreshData(force)} />),
-            new TopicTab(topic, 'consumers', 'viewConsumers', 'Consumers', (t) => <TopicConsumers topic={t} />),
-            new TopicTab(topic, 'partitions', 'viewPartitions', 'Partitions', (t) => <TopicPartitions topic={t} />),
-            new TopicTab(topic, 'configuration', 'viewConfig', 'Configuration', (t) => <TopicConfiguration topic={t} />),
-            new TopicTab(topic, 'topicacl', 'seeTopic', 'ACL', (t) => {
-                return (
-                    <AclList
-                        acl={api.topicAcls.get(t.topicName)}
-                    />
-                );
-            }, [() => {
-                if (AppFeatures.SINGLE_SIGN_ON)
-                    if (api.userData != null && !api.userData.canListAcls)
-                        return <Popover content={'You need the cluster-permission \'viewAcl\' to view this tab'} hideCloseButton={true}>
-                            <div> <LockIcon size={16} /> ACL</div>
-                        </Popover>
-                return undefined;
-            }]),
-            new TopicTab(topic, 'documentation', 'seeTopic', 'Documentation', (t) => <TopicDocumentation topic={t} />, [
-                t => t.documentation == 'NOT_CONFIGURED' ? mkDocuTip('Topic documentation is not configured') : null,
-                t => t.documentation == 'NOT_EXISTENT' ? mkDocuTip('Documentation for this topic was not found in the configured repository', warnIcon) : null,
-            ]),
+            new TopicTab(topic, 'messages', 'Messages', (t) => <TopicMessageView topic={t} refreshTopicData={(force: boolean) => this.refreshData(force)} />),
+            new TopicTab(topic, 'consumers', 'Consumers', (t) => <TopicConsumers topic={t} />),
+            new TopicTab(topic, 'configuration', 'Configuration', (t) => <TopicConfiguration topic={t} />),
         ];
-
-        if (isServerless())
-            this.topicTabs.removeAll(x => x.id == 'documentation');
 
         makeObservable(this);
     }
@@ -185,11 +139,6 @@ class TopicDetails extends PageComponent<{ topicName: string }> {
         // configuration is always required for the statistics bar
         api.refreshTopicConfig(this.props.topicName, force);
 
-        // documentation can be lazy loaded
-        if (uiSettings.topicDetailsActiveTabKey == 'documentation') api.refreshTopicDocumentation(this.props.topicName, force);
-
-        // ACL can be lazy loaded
-        if (uiSettings.topicDetailsActiveTabKey == 'topicacl') api.refreshTopicAcls(this.props.topicName, force);
     }
 
     @computed get topic(): undefined | Topic | null {

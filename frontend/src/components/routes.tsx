@@ -19,27 +19,13 @@ import TopicDetails from './pages/topics/Topic.Details';
 import GroupList from './pages/consumers/Group.List';
 import GroupDetails from './pages/consumers/Group.Details';
 import { uiState } from '../state/uiState';
-import AdminPage from './pages/admin/AdminPage';
 import { api } from '../state/backendApi';
-import SchemaList from './pages/schemas/Schema.List';
-import SchemaDetailsView from './pages/schemas/Schema.Details';
-import AclList from './pages/acls/Acl.List';
-import { HomeIcon, CogIcon, CollectionIcon, CubeTransparentIcon, FilterIcon, ShieldCheckIcon, LinkIcon, ScaleIcon, BeakerIcon } from '@heroicons/react/outline';
-import ReassignPartitions from './pages/reassign-partitions/ReassignPartitions';
+import { CollectionIcon, FilterIcon } from '@heroicons/react/outline';
 import { Feature, FeatureEntry, isSupported } from '../state/supportedFeatures';
 import { UserPermissions } from '../state/restInterfaces';
-import KafkaConnectOverview from './pages/connect/Overview';
-import KafkaConnectorDetails from './pages/connect/Connector.Details';
-import KafkaClusterDetails from './pages/connect/Cluster.Details';
-import CreateConnector from './pages/connect/CreateConnector';
-import QuotasList from './pages/quotas/Quotas.List';
 import { AppFeature, AppFeatures } from '../utils/env';
 import { AnimatePresence } from '../utils/animationProps';
 import { NavLinkProps } from '@redpanda-data/ui/dist/components/Nav/NavLink';
-import Overview from './pages/overview/Overview';
-import { BrokerDetails } from './pages/overview/Broker.Details';
-import EditSchemaCompatibilityPage from './pages/schemas/EditCompatibility';
-import { SchemaCreatePage, SchemaAddVersionPage } from './pages/schemas/Schema.Create';
 import { TopicProducePage } from './pages/topics/Topic.Produce';
 
 //
@@ -98,7 +84,7 @@ export const RouteView = (() =>
     <AnimatePresence mode="wait">
         <Switch>
             {/* Index */}
-            <Route exact path="/" render={() => <Redirect to="/overview" />} />
+            <Route exact path="/" render={() => <Redirect to="/topics" />} />
 
             {/* Emit all <Route/> elements */}
             {EmitRouteViews(APP_ROUTES)}
@@ -224,50 +210,14 @@ function routeVisibility(
 //
 export const APP_ROUTES: IRouteEntry[] = [
 
-    MakeRoute<{}>('/overview', Overview, 'Overview', HomeIcon),
-    MakeRoute<{ brokerId: string }>('/overview/:brokerId', BrokerDetails, 'Broker Details'),
-
     MakeRoute<{}>('/topics', TopicList, 'Topics', CollectionIcon),
     MakeRoute<{ topicName: string }>('/topics/:topicName', TopicDetails, 'Topics'),
     MakeRoute<{ topicName: string }>('/topics/:topicName/produce-record', TopicProducePage, 'Produce Record'),
-
-    MakeRoute<{}>('/schema-registry', SchemaList, 'Schema Registry', CubeTransparentIcon),
-    MakeRoute<{}>('/schema-registry/create', SchemaCreatePage, 'Create schema'),
-    MakeRoute<{ subjectName: string }>('/schema-registry/subjects/:subjectName/add-version', SchemaAddVersionPage, 'Add version'),
-    MakeRoute<{ subjectName: string }>('/schema-registry/subjects/:subjectName', SchemaDetailsView, 'Schema Registry'),
-    MakeRoute<{ subjectName: string }>('/schema-registry/edit-compatibility', EditSchemaCompatibilityPage, 'Edit Schema Compatibility'),
-    MakeRoute<{ subjectName: string }>('/schema-registry/subjects/:subjectName/edit-compatibility', EditSchemaCompatibilityPage, 'Edit Schema Compatibility'),
 
     MakeRoute<{}>('/groups', GroupList, 'Consumer Groups', FilterIcon, undefined,
         routeVisibility(true, [Feature.ConsumerGroups])
     ),
     MakeRoute<{ groupId: string }>('/groups/:groupId/', GroupDetails, 'Consumer Groups'),
-
-    MakeRoute<{}>('/acls', AclList, 'Security', ShieldCheckIcon, true,
-        routeVisibility(true, [], ['canListAcls'])
-    ),
-
-    MakeRoute<{}>('/quotas', QuotasList, 'Quotas', ScaleIcon, true,
-        routeVisibility(true, [Feature.GetQuotas], ['canListQuotas'])
-    ),
-
-    MakeRoute<{}>('/connect-clusters', KafkaConnectOverview, 'Connectors', LinkIcon, true),
-    MakeRoute<{ clusterName: string }>('/connect-clusters/:clusterName', KafkaClusterDetails, 'Connect Cluster'),
-    MakeRoute<{ clusterName: string}>('/connect-clusters/:clusterName/create-connector', CreateConnector, 'Create Connector', undefined, undefined, routeVisibility(false)),
-    MakeRoute<{ clusterName: string, connector: string }>('/connect-clusters/:clusterName/:connector', KafkaConnectorDetails, 'Connector Details'),
-
-    MakeRoute<{}>('/reassign-partitions', ReassignPartitions, 'Reassign Partitions', BeakerIcon, false,
-        routeVisibility(true,
-            [Feature.GetReassignments, Feature.PatchReassignments],
-            ['canPatchConfigs', 'canReassignPartitions'],
-            ['REASSIGN_PARTITIONS']
-        )
-    ),
-
-    MakeRoute<{}>('/admin', AdminPage, 'Admin', CogIcon, false,
-        routeVisibility(() => api.userData?.canViewConsoleUsers ?? false)
-    ),
-
 
 ].filterNull();
 
