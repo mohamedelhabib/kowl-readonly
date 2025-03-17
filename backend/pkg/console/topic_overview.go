@@ -11,12 +11,11 @@ package console
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
 
-	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kmsg"
 	"go.uber.org/zap"
 )
 
@@ -46,23 +45,35 @@ type TopicSummary struct {
 	CleanupPolicy     string             `json:"cleanupPolicy"`
 	Documentation     DocumentationState `json:"documentation"`
 	LogDirSummary     TopicLogDirSummary `json:"logDirSummary"`
-
-	// What actions the logged in user is allowed to run on this topic
-	AllowedActions []string `json:"allowedActions"`
 }
 
 // GetTopicsOverview returns a TopicSummary for all Kafka Topics
+//
+//nolint:gocognit // This function is complex by nature as it has to fetch multiple information from Kafka
 func (s *Service) GetTopicsOverview(ctx context.Context) ([]*TopicSummary, error) {
+	_, adminCl, err := s.kafkaClientFactory.GetKafkaClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	// 1. Request metadata
-	metadata, err := s.kafkaSvc.GetMetadataTopics(ctx, nil)
+	metadata, err := adminCl.Metadata(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	// 2. Extract all topicNames from metadata
-	topicNames, err := s.GetAllTopicNames(ctx, metadata)
-	if err != nil {
-		return nil, err
+	topicNames := make([]string, 0, len(metadata.Topics))
+	for _, topic := range metadata.Topics {
+		topicName := topic.Topic
+		if topic.Err != nil {
+			s.logger.Error("failed to get topic metadata while listing topics",
+				zap.String("topic_name", topicName),
+				zap.Error(topic.Err))
+			return nil, topic.Err
+		}
+
+		topicNames = append(topicNames, topicName)
 	}
 
 	// 3. Get log dir sizes & configs for each topic concurrently
@@ -72,6 +83,7 @@ func (s *Service) GetTopicsOverview(ctx context.Context) ([]*TopicSummary, error
 
 	configs := make(map[string]*TopicConfig)
 	var logDirsByTopic map[string]TopicLogDirSummary
+	var logDirErrorMsg string
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 	go func() {
@@ -83,15 +95,21 @@ func (s *Service) GetTopicsOverview(ctx context.Context) ([]*TopicSummary, error
 	}()
 	go func() {
 		defer wg.Done()
-		logDirsByTopic = s.logDirsByTopic(childCtx, metadata)
+		logDirs, err := s.logDirsByTopic(childCtx)
+		if err == nil {
+			logDirsByTopic = logDirs
+		} else {
+			s.logger.Warn("failed to retrieve log dirs by topic", zap.Error(err))
+			logDirErrorMsg = err.Error()
+		}
 	}()
 	wg.Wait()
 
 	// 4. Merge information from all requests and construct the TopicSummary object
-	res := make([]*TopicSummary, len(topicNames))
-	for i, topic := range metadata.Topics {
+	res := make([]*TopicSummary, 0, len(topicNames))
+	for _, topic := range metadata.Topics {
 		policy := "N/A"
-		topicName := *topic.Topic
+		topicName := topic.Topic
 		if configs != nil {
 			// Configs might be nil if we don't have the required Kafka ACLs to get topic configs.
 			if val, ok := configs[topicName]; ok {
@@ -115,15 +133,27 @@ func (s *Service) GetTopicsOverview(ctx context.Context) ([]*TopicSummary, error
 			}
 		}
 
-		res[i] = &TopicSummary{
+		// Set dummy response in case of an error when describing metadata or log dirs
+		// If we have a topic log dir summary for the given topic we will return that.
+		logDirSummary := TopicLogDirSummary{
+			TotalSizeBytes: -1,
+			Hint:           fmt.Sprintf("Failed to describe log dirs: %v", logDirErrorMsg),
+		}
+		if logDirsByTopic != nil {
+			if sum, exists := logDirsByTopic[topicName]; exists {
+				logDirSummary = sum
+			}
+		}
+
+		res = append(res, &TopicSummary{
 			TopicName:         topicName,
 			IsInternal:        topic.IsInternal,
 			PartitionCount:    len(topic.Partitions),
 			ReplicationFactor: len(topic.Partitions[0].Replicas),
 			CleanupPolicy:     policy,
-			LogDirSummary:     logDirsByTopic[topicName],
+			LogDirSummary:     logDirSummary,
 			Documentation:     docState,
-		}
+		})
 	}
 
 	// 5. Return map as array which is sorted by topic name
@@ -136,28 +166,19 @@ func (s *Service) GetTopicsOverview(ctx context.Context) ([]*TopicSummary, error
 
 // GetAllTopicNames returns all topic names from the metadata. You can either pass the metadata response into
 // this method (to avoid duplicate requests) or let the function request the metadata.
-func (s *Service) GetAllTopicNames(ctx context.Context, metadata *kmsg.MetadataResponse) ([]string, error) {
-	if metadata == nil {
-		var err error
-		metadata, err = s.kafkaSvc.GetMetadataTopics(ctx, nil)
-		if err != nil {
-			return nil, err
-		}
+func (s *Service) GetAllTopicNames(ctx context.Context) ([]string, error) {
+	_, adminCl, err := s.kafkaClientFactory.GetKafkaClient(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	topicNames := make([]string, len(metadata.Topics))
-	for i, topic := range metadata.Topics {
-		topicName := *topic.Topic
-		err := kerr.ErrorForCode(topic.ErrorCode)
-		if err != nil {
-			s.logger.Error("failed to get topic metadata while listing topics",
-				zap.String("topic_name", topicName),
-				zap.Error(err))
-			return nil, err
-		}
-
-		topicNames[i] = topicName
+	metadata, err := adminCl.Metadata(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch topic metadata: %w", err)
+	}
+	if err := metadata.Topics.Error(); err != nil {
+		return nil, fmt.Errorf("failed to fetch topic metadata: %w", err)
 	}
 
-	return topicNames, nil
+	return metadata.Topics.Names(), nil
 }

@@ -9,67 +9,85 @@
  * by the Apache License, Version 2.0
  */
 
-import { ChevronRightIcon } from '@primer/octicons-react';
+import { Box, Breadcrumbs, ColorModeSwitch, CopyButton, Flex, Text } from '@redpanda-data/ui';
+import { computed } from 'mobx';
 import { observer } from 'mobx-react';
-import { Link, useRouteMatch } from 'react-router-dom';
+import { useRouteMatch } from 'react-router-dom';
 import { isEmbedded } from '../../config';
-import { uiState } from '../../state/uiState';
-import { MotionDiv } from '../../utils/animationProps';
-import { ZeroSizeWrapper } from '../../utils/tsxUtils';
+import { type BreadcrumbEntry, uiState } from '../../state/uiState';
+import { IsDev } from '../../utils/env';
 import { UserPreferencesButton } from '../misc/UserPreferences';
 import DataRefreshButton from '../misc/buttons/data-refresh/Component';
-import { IsDev } from '../../utils/env';
-import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbLinkProps, ColorModeSwitch, Flex } from '@redpanda-data/ui';
 
 const AppPageHeader = observer(() => {
-    const showRefresh = useShouldShowRefresh();
+  const showRefresh = useShouldShowRefresh();
 
-    return <MotionDiv identityKey={uiState.pageTitle} className="pageTitle" style={{ display: 'flex', paddingRight: '16px', alignItems: 'center', marginBottom: '10px' }}>
-        <Breadcrumb spacing="8px" separator={<ChevronRightIcon/>}>
-            {!isEmbedded() && uiState.selectedClusterName &&
-                <BreadcrumbItem>
-                    <BreadcrumbLink as={Link} to="/">
-                        Cluster
-                    </BreadcrumbLink>
-                </BreadcrumbItem>
-            }
-            {uiState.pageBreadcrumbs.filter((_,i,arr) => {
-                const isCurrentPage = arr.length - 1 === i
-                return !isEmbedded() || isCurrentPage
-            }).map((entry, i, arr) => {
-                    const isCurrentPage = arr.length - 1 === i;
-                    const currentBreadcrumbProps: BreadcrumbLinkProps = isCurrentPage ? {
-                        as: 'span',
-                        fontWeight: 700,
-                        fontSize: 'xl',
-                    } : {};
+  const breadcrumbItems = computed(() => {
+    const items: BreadcrumbEntry[] = [...uiState.pageBreadcrumbs];
 
-                    return (
-                        <BreadcrumbItem key={entry.linkTo} isCurrentPage={isCurrentPage}>
-                            <BreadcrumbLink
-                                to={entry.linkTo}
-                                as={isCurrentPage ? 'span': Link}
-                                {...currentBreadcrumbProps}
-                            >
-                                {entry.title}
-                            </BreadcrumbLink>
+    if (!isEmbedded() && uiState.selectedClusterName) {
+      items.unshift({
+        heading: '',
+        title: 'Cluster',
+        linkTo: '/',
+      });
+    }
 
-                            {isCurrentPage && showRefresh && (
-                                <ZeroSizeWrapper justifyContent="start">
-                                    <DataRefreshButton/>
-                                </ZeroSizeWrapper>
-                            )}
-                        </BreadcrumbItem>
-                    );
-                }
-            )}
-        </Breadcrumb>
+    return items;
+  }).get();
 
-        <Flex ml="auto" alignItems="center" gap={3}>
-            <UserPreferencesButton />
-            {(IsDev && !isEmbedded()) && <ColorModeSwitch />}
+  const lastBreadcrumb = breadcrumbItems.pop();
+
+  return (
+    <Box>
+      {/* we need to refactor out #mainLayout > div rule, for now I've added this box as a workaround */}
+      <Flex mb={5} alignItems="center" justifyContent="space-between">
+        {!isEmbedded() && (
+          <Breadcrumbs
+            showHomeIcon={false}
+            items={breadcrumbItems.map((x) => ({
+              name: x.title,
+              heading: x.heading,
+              to: x.linkTo,
+            }))}
+          />
+        )}
+      </Flex>
+
+      <Flex pb={2} alignItems="center" justifyContent="space-between">
+        <Flex alignItems="center">
+          {lastBreadcrumb && (
+            <Text
+              fontWeight={700}
+              as="span"
+              fontSize="xl"
+              mr={2}
+              {...(lastBreadcrumb.options?.canBeTruncated
+                ? {
+                    wordBreak: 'break-all',
+                    whiteSpace: 'break-spaces',
+                  }
+                : {
+                    whiteSpace: 'nowrap',
+                  })}
+            >
+              {lastBreadcrumb.title}
+            </Text>
+          )}
+          {lastBreadcrumb && (
+            <Box>
+              {lastBreadcrumb.options?.canBeCopied && <CopyButton content={lastBreadcrumb.title} variant="ghost" />}
+            </Box>
+          )}
+          {showRefresh && <DataRefreshButton />}
         </Flex>
-    </MotionDiv>;
+        <Flex alignItems="center" gap={2}>
+          <UserPreferencesButton />
+          {IsDev && !isEmbedded() && <ColorModeSwitch m={0} p={0} variant="ghost" />}
+        </Flex>
+      </Flex>
+    </Box>
+  );
 });
 
 export default AppPageHeader;
@@ -82,35 +100,32 @@ export default AppPageHeader;
  * @returns {boolean} Indicates whether the refresh button should be shown (true/false).
  */
 function useShouldShowRefresh() {
-    const connectClusterMatch = useRouteMatch<{ clusterName: string, connectorName: string }>({
-        path: '/connect-clusters/:clusterName/:connectorName',
-        strict: false,
-        sensitive: true,
-        exact: true
-    });
+  const connectClusterMatch = useRouteMatch<{ clusterName: string; connectorName: string }>({
+    path: '/connect-clusters/:clusterName/:connectorName',
+    strict: false,
+    sensitive: true,
+    exact: true,
+  });
 
-    const schemaCreateMatch = useRouteMatch({
-        path: '/schema-registry/create',
-        strict: false,
-        sensitive: true,
-        exact: true
-    });
+  const schemaCreateMatch = useRouteMatch({
+    path: '/schema-registry/create',
+    strict: false,
+    sensitive: true,
+    exact: true,
+  });
 
-    const topicProduceRecordMatch = useRouteMatch({
-        path: '/topics/:topicName/produce-record',
-        strict: false,
-        sensitive: true,
-        exact: true
-    });
+  const topicProduceRecordMatch = useRouteMatch({
+    path: '/topics/:topicName/produce-record',
+    strict: false,
+    sensitive: true,
+    exact: true,
+  });
 
-    if (connectClusterMatch && connectClusterMatch.params.connectorName == 'create-connector')
-        return false;
+  if (connectClusterMatch && connectClusterMatch.params.connectorName === 'create-connector') return false;
 
-    if (schemaCreateMatch)
-        return false
+  if (schemaCreateMatch) return false;
 
-    if (topicProduceRecordMatch)
-        return false
+  if (topicProduceRecordMatch) return false;
 
-    return true;
+  return true;
 }

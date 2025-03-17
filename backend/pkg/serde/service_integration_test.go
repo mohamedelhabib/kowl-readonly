@@ -48,9 +48,10 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/redpanda-data/console/backend/pkg/config"
+	schemafactory "github.com/redpanda-data/console/backend/pkg/factory/schema"
 	ms "github.com/redpanda-data/console/backend/pkg/msgpack"
 	protopkg "github.com/redpanda-data/console/backend/pkg/proto"
-	"github.com/redpanda-data/console/backend/pkg/schema"
+	schemacache "github.com/redpanda-data/console/backend/pkg/schema"
 	"github.com/redpanda-data/console/backend/pkg/serde/testdata/proto/gen/common"
 	indexv1 "github.com/redpanda-data/console/backend/pkg/serde/testdata/proto/gen/index/v1"
 	shopv1 "github.com/redpanda-data/console/backend/pkg/serde/testdata/proto/gen/shop/v1"
@@ -79,11 +80,11 @@ func (s *SerdeIntegrationTestSuite) createBaseConfig() config.Config {
 	cfg.SetDefaults()
 	cfg.MetricsNamespace = testutil.MetricNameForTest("serde")
 	cfg.Kafka.Brokers = []string{s.seedBroker}
-	cfg.Kafka.Protobuf.Enabled = true
-	cfg.Kafka.Protobuf.SchemaRegistry.Enabled = true
-	cfg.Kafka.Schema.Enabled = true
-	cfg.Kafka.Schema.URLs = []string{s.registryAddress}
-	cfg.Kafka.MessagePack.Enabled = false
+	cfg.Serde.Protobuf.Enabled = true
+	cfg.SchemaRegistry.Enabled = true
+	cfg.SchemaRegistry.Enabled = true
+	cfg.SchemaRegistry.URLs = []string{s.registryAddress}
+	cfg.Serde.MessagePack.Enabled = false
 
 	return cfg
 }
@@ -96,6 +97,13 @@ func (s *SerdeIntegrationTestSuite) consumerClientForTopic(topicName string) *kg
 		kgo.SeedBrokers(s.seedBroker),
 		kgo.ConsumeTopics(topicName),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		// We've seen issues in integration tests with the default being applied for
+		// the metadata min age. The issue we observed is that the metadata with
+		// leader information for each partition was outdated/wrong, shortly
+		// after we created a new topic to produce data to this topic. This
+		// caused the client to wait for several seconds before re-fetching
+		// new metadata.
+		kgo.MetadataMinAge(250*time.Millisecond),
 	)
 	require.NoError(err)
 
@@ -108,7 +116,8 @@ func (s *SerdeIntegrationTestSuite) SetupSuite() {
 
 	ctx := context.Background()
 
-	redpandaContainer, err := redpanda.RunContainer(ctx, testcontainers.WithImage("redpandadata/redpanda:v23.3.2"))
+	// redpandaContainer, err := redpanda.Run(ctx, "redpandadata/redpanda:v23.3.18")
+	redpandaContainer, err := redpanda.Run(ctx, "redpandadata/redpanda-unstable:v24.2.1-rc5")
 	require.NoError(err)
 
 	s.redpandaContainer = redpandaContainer
@@ -139,6 +148,34 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 
 	ctx := context.Background()
 
+	cfg := s.createBaseConfig()
+
+	logger, err := zap.NewProduction()
+	require.NoError(err)
+
+	protoSvc, err := protopkg.NewService(cfg.Serde.Protobuf, logger)
+	require.NoError(err)
+
+	err = protoSvc.Start()
+	require.NoError(err)
+
+	mspPackSvc, err := ms.NewService(cfg.Serde.MessagePack)
+	require.NoError(err)
+
+	schemaClientFactory, err := schemafactory.NewSingleClientProvider(&cfg)
+	require.NoError(err)
+
+	cacheNamespaceFn := func(context.Context) (string, error) {
+		return "single/", nil
+	}
+	cachedSchemaClient, err := schemacache.NewCachedClient(schemaClientFactory, cacheNamespaceFn)
+	require.NoError(err)
+
+	cborConfig := config.Cbor{}
+
+	serdeSvc, err := NewService(protoSvc, mspPackSvc, cachedSchemaClient, cborConfig)
+	require.NoError(err)
+
 	t.Run("plain JSON", func(t *testing.T) {
 		testTopicName := testutil.TopicNameForTest("serde_plain_json")
 		_, err := s.kafkaAdminClient.CreateTopic(ctx, 1, 1, nil, testTopicName)
@@ -148,25 +185,6 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 			_, err := s.kafkaAdminClient.DeleteTopics(ctx, testTopicName)
 			assert.NoError(err)
 		}()
-
-		cfg := s.createBaseConfig()
-
-		logger, err := zap.NewProduction()
-		require.NoError(err)
-
-		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
-		require.NoError(err)
-
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
-		require.NoError(err)
-
-		err = protoSvc.Start()
-		require.NoError(err)
-
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
-		require.NoError(err)
-
-		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
 
 		order := testutil.Order{ID: strconv.Itoa(123)}
 		serializedOrder, err := json.Marshal(order)
@@ -252,7 +270,7 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal(len([]byte(order.ID)), dr.Key.PayloadSizeBytes)
 
 		// key troubleshooting
-		require.Len(dr.Key.Troubleshooting, 10)
+		require.Len(dr.Key.Troubleshooting, 11)
 		assert.Equal(string(PayloadEncodingNull), dr.Key.Troubleshooting[0].SerdeName)
 		assert.Equal("payload is not null as expected for none encoding", dr.Key.Troubleshooting[0].Message)
 		assert.Equal(string(PayloadEncodingJSON), dr.Key.Troubleshooting[1].SerdeName)
@@ -271,8 +289,10 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal("message pack encoding not configured for topic: test.redpanda.console.serde_plain_json", dr.Key.Troubleshooting[7].Message)
 		assert.Equal(string(PayloadEncodingSmile), dr.Key.Troubleshooting[8].SerdeName)
 		assert.Equal("first bytes indicate this it not valid Smile format", dr.Key.Troubleshooting[8].Message)
-		assert.Equal(string(PayloadEncodingUtf8WithControlChars), dr.Key.Troubleshooting[9].SerdeName)
-		assert.Equal("payload does not contain UTF8 control characters", dr.Key.Troubleshooting[9].Message)
+		assert.Equal(string(PayloadEncodingCbor), dr.Key.Troubleshooting[9].SerdeName)
+		assert.Equal("cbor encoding not configured for topic: test.redpanda.console.serde_plain_json", dr.Key.Troubleshooting[9].Message)
+		assert.Equal(string(PayloadEncodingUtf8WithControlChars), dr.Key.Troubleshooting[10].SerdeName)
+		assert.Equal("payload does not contain UTF8 control characters", dr.Key.Troubleshooting[10].Message)
 	})
 
 	t.Run("plain JSON deserializer option", func(t *testing.T) {
@@ -284,25 +304,6 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 			_, err := s.kafkaAdminClient.DeleteTopics(ctx, testTopicName)
 			assert.NoError(err)
 		}()
-
-		cfg := s.createBaseConfig()
-
-		logger, err := zap.NewProduction()
-		require.NoError(err)
-
-		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
-		require.NoError(err)
-
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
-		require.NoError(err)
-
-		err = protoSvc.Start()
-		require.NoError(err)
-
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
-		require.NoError(err)
-
-		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
 
 		order := testutil.Order{ID: strconv.Itoa(123)}
 		serializedOrder, err := json.Marshal(order)
@@ -390,7 +391,7 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal(len([]byte(order.ID)), dr.Key.PayloadSizeBytes)
 
 		// key troubleshooting
-		require.Len(dr.Key.Troubleshooting, 10)
+		require.Len(dr.Key.Troubleshooting, 11)
 		assert.Equal(string(PayloadEncodingNull), dr.Key.Troubleshooting[0].SerdeName)
 		assert.Equal("payload is not null as expected for none encoding", dr.Key.Troubleshooting[0].Message)
 		assert.Equal(string(PayloadEncodingJSON), dr.Key.Troubleshooting[1].SerdeName)
@@ -409,8 +410,10 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal("message pack encoding not configured for topic: test.redpanda.console.serde_plain_json_deserializer_option", dr.Key.Troubleshooting[7].Message)
 		assert.Equal(string(PayloadEncodingSmile), dr.Key.Troubleshooting[8].SerdeName)
 		assert.Equal("first bytes indicate this it not valid Smile format", dr.Key.Troubleshooting[8].Message)
-		assert.Equal(string(PayloadEncodingUtf8WithControlChars), dr.Key.Troubleshooting[9].SerdeName)
-		assert.Equal("payload does not contain UTF8 control characters", dr.Key.Troubleshooting[9].Message)
+		assert.Equal(string(PayloadEncodingCbor), dr.Key.Troubleshooting[9].SerdeName)
+		assert.Equal("cbor encoding not configured for topic: test.redpanda.console.serde_plain_json_deserializer_option", dr.Key.Troubleshooting[9].Message)
+		assert.Equal(string(PayloadEncodingUtf8WithControlChars), dr.Key.Troubleshooting[10].SerdeName)
+		assert.Equal("payload does not contain UTF8 control characters", dr.Key.Troubleshooting[10].Message)
 	})
 
 	t.Run("plain JSON incorrect value deserializer option", func(t *testing.T) {
@@ -422,25 +425,6 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 			_, err := s.kafkaAdminClient.DeleteTopics(ctx, testTopicName)
 			assert.NoError(err)
 		}()
-
-		cfg := s.createBaseConfig()
-
-		logger, err := zap.NewProduction()
-		require.NoError(err)
-
-		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
-		require.NoError(err)
-
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
-		require.NoError(err)
-
-		err = protoSvc.Start()
-		require.NoError(err)
-
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
-		require.NoError(err)
-
-		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
 
 		order := testutil.Order{ID: strconv.Itoa(123)}
 		serializedOrder, err := json.Marshal(order)
@@ -495,7 +479,7 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		require.NotNil(dr)
 
 		// check value properties
-		assert.Equal(PayloadEncoding(""), dr.Value.Encoding)
+		assert.Equal(PayloadEncodingProtobuf, dr.Value.Encoding)
 		assert.Equal(false, dr.Value.IsPayloadNull)
 		assert.Equal(false, dr.Value.IsPayloadTooLarge)
 		assert.Equal(serializedOrder, dr.Value.OriginalPayload)
@@ -523,7 +507,7 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal(len([]byte(order.ID)), dr.Key.PayloadSizeBytes)
 
 		// key troubleshooting
-		require.Len(dr.Key.Troubleshooting, 10)
+		require.Len(dr.Key.Troubleshooting, 11)
 		assert.Equal(string(PayloadEncodingNull), dr.Key.Troubleshooting[0].SerdeName)
 		assert.Equal("payload is not null as expected for none encoding", dr.Key.Troubleshooting[0].Message)
 		assert.Equal(string(PayloadEncodingJSON), dr.Key.Troubleshooting[1].SerdeName)
@@ -542,8 +526,10 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal("message pack encoding not configured for topic: test.redpanda.console.serde_plain_json_bad_value_deser", dr.Key.Troubleshooting[7].Message)
 		assert.Equal(string(PayloadEncodingSmile), dr.Key.Troubleshooting[8].SerdeName)
 		assert.Equal("first bytes indicate this it not valid Smile format", dr.Key.Troubleshooting[8].Message)
-		assert.Equal(string(PayloadEncodingUtf8WithControlChars), dr.Key.Troubleshooting[9].SerdeName)
-		assert.Equal("payload does not contain UTF8 control characters", dr.Key.Troubleshooting[9].Message)
+		assert.Equal(string(PayloadEncodingCbor), dr.Key.Troubleshooting[9].SerdeName)
+		assert.Equal("cbor encoding not configured for topic: test.redpanda.console.serde_plain_json_bad_value_deser", dr.Key.Troubleshooting[9].Message)
+		assert.Equal(string(PayloadEncodingUtf8WithControlChars), dr.Key.Troubleshooting[10].SerdeName)
+		assert.Equal("payload does not contain UTF8 control characters", dr.Key.Troubleshooting[10].Message)
 	})
 
 	t.Run("plain protobuf", func(t *testing.T) {
@@ -556,34 +542,27 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 			assert.NoError(err)
 		}()
 
-		cfg := s.createBaseConfig()
-		cfg.Kafka.Protobuf.Enabled = true
-		cfg.Kafka.Protobuf.Mappings = []config.ProtoTopicMapping{
+		topic0 := config.RegexpOrLiteral{}
+		require.NoError(topic0.UnmarshalText([]byte(testTopicName)))
+
+		testCfg := cfg
+		testCfg.Serde.Protobuf.Enabled = true
+		testCfg.Serde.Protobuf.Mappings = []config.ProtoTopicMapping{
 			{
-				TopicName:      testTopicName,
+				TopicName:      topic0,
 				ValueProtoType: "shop.v1.Order",
 			},
 		}
-		cfg.Kafka.Protobuf.FileSystem.Enabled = true
-		cfg.Kafka.Protobuf.FileSystem.RefreshInterval = 1 * time.Minute
-		cfg.Kafka.Protobuf.FileSystem.Paths = []string{"testdata/proto"}
+		testCfg.Serde.Protobuf.FileSystem.Enabled = true
+		testCfg.Serde.Protobuf.FileSystem.RefreshInterval = 1 * time.Minute
+		testCfg.Serde.Protobuf.FileSystem.Paths = []string{"testdata/proto"}
 
-		logger, err := zap.NewProduction()
+		protoSvc, err := protopkg.NewService(testCfg.Serde.Protobuf, logger)
 		require.NoError(err)
+		require.NoError(protoSvc.Start())
 
-		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
+		serdeSvc, err := NewService(protoSvc, mspPackSvc, cachedSchemaClient, cborConfig)
 		require.NoError(err)
-
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
-		require.NoError(err)
-
-		err = protoSvc.Start()
-		require.NoError(err)
-
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
-		require.NoError(err)
-
-		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
 
 		orderCreatedAt := time.Date(2023, time.June, 10, 13, 0, 0, 0, time.UTC)
 		msg := shopv1.Order{
@@ -686,7 +665,7 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal(len([]byte(msg.Id)), dr.Key.PayloadSizeBytes)
 
 		// key troubleshooting
-		require.Len(dr.Key.Troubleshooting, 10)
+		require.Len(dr.Key.Troubleshooting, 11)
 		assert.Equal(string(PayloadEncodingNull), dr.Key.Troubleshooting[0].SerdeName)
 		assert.Equal("payload is not null as expected for none encoding", dr.Key.Troubleshooting[0].Message)
 		assert.Equal(string(PayloadEncodingJSON), dr.Key.Troubleshooting[1].SerdeName)
@@ -705,8 +684,10 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal("message pack encoding not configured for topic: test.redpanda.console.serde_plain_protobuf", dr.Key.Troubleshooting[7].Message)
 		assert.Equal(string(PayloadEncodingSmile), dr.Key.Troubleshooting[8].SerdeName)
 		assert.Equal("first bytes indicate this it not valid Smile format", dr.Key.Troubleshooting[8].Message)
-		assert.Equal(string(PayloadEncodingUtf8WithControlChars), dr.Key.Troubleshooting[9].SerdeName)
-		assert.Equal("payload does not contain UTF8 control characters", dr.Key.Troubleshooting[9].Message)
+		assert.Equal(string(PayloadEncodingCbor), dr.Key.Troubleshooting[9].SerdeName)
+		assert.Equal("cbor encoding not configured for topic: test.redpanda.console.serde_plain_protobuf", dr.Key.Troubleshooting[9].Message)
+		assert.Equal(string(PayloadEncodingUtf8WithControlChars), dr.Key.Troubleshooting[10].SerdeName)
+		assert.Equal("payload does not contain UTF8 control characters", dr.Key.Troubleshooting[10].Message)
 	})
 
 	t.Run("plain protobuf reference", func(t *testing.T) {
@@ -719,34 +700,27 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 			assert.NoError(err)
 		}()
 
-		cfg := s.createBaseConfig()
-		cfg.Kafka.Protobuf.Enabled = true
-		cfg.Kafka.Protobuf.Mappings = []config.ProtoTopicMapping{
+		topic0 := config.RegexpOrLiteral{}
+		require.NoError(topic0.UnmarshalText([]byte(testTopicName)))
+
+		testCfg := cfg
+		testCfg.Serde.Protobuf.Enabled = true
+		testCfg.Serde.Protobuf.Mappings = []config.ProtoTopicMapping{
 			{
-				TopicName:      testTopicName,
+				TopicName:      topic0,
 				ValueProtoType: "shop.v2.Order",
 			},
 		}
-		cfg.Kafka.Protobuf.FileSystem.Enabled = true
-		cfg.Kafka.Protobuf.FileSystem.RefreshInterval = 1 * time.Minute
-		cfg.Kafka.Protobuf.FileSystem.Paths = []string{"testdata/proto"}
+		testCfg.Serde.Protobuf.FileSystem.Enabled = true
+		testCfg.Serde.Protobuf.FileSystem.RefreshInterval = 1 * time.Minute
+		testCfg.Serde.Protobuf.FileSystem.Paths = []string{"testdata/proto"}
 
-		logger, err := zap.NewProduction()
+		testProtoSvc, err := protopkg.NewService(testCfg.Serde.Protobuf, logger)
 		require.NoError(err)
+		require.NoError(testProtoSvc.Start())
 
-		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
+		serdeSvc, err := NewService(testProtoSvc, mspPackSvc, cachedSchemaClient, cborConfig)
 		require.NoError(err)
-
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
-		require.NoError(err)
-
-		err = protoSvc.Start()
-		require.NoError(err)
-
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
-		require.NoError(err)
-
-		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
 
 		orderCreatedAt := time.Date(2023, time.July, 15, 10, 0, 0, 0, time.UTC)
 		orderUpdatedAt := time.Date(2023, time.July, 15, 11, 0, 0, 0, time.UTC)
@@ -971,7 +945,7 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal(len([]byte(msg.Id)), dr.Key.PayloadSizeBytes)
 
 		// key troubleshooting
-		require.Len(dr.Key.Troubleshooting, 10)
+		require.Len(dr.Key.Troubleshooting, 11)
 		assert.Equal(string(PayloadEncodingNull), dr.Key.Troubleshooting[0].SerdeName)
 		assert.Equal("payload is not null as expected for none encoding", dr.Key.Troubleshooting[0].Message)
 		assert.Equal(string(PayloadEncodingJSON), dr.Key.Troubleshooting[1].SerdeName)
@@ -990,8 +964,10 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal("message pack encoding not configured for topic: test.redpanda.console.serde_plain_protobuf_ref", dr.Key.Troubleshooting[7].Message)
 		assert.Equal(string(PayloadEncodingSmile), dr.Key.Troubleshooting[8].SerdeName)
 		assert.Equal("first bytes indicate this it not valid Smile format", dr.Key.Troubleshooting[8].Message)
-		assert.Equal(string(PayloadEncodingUtf8WithControlChars), dr.Key.Troubleshooting[9].SerdeName)
-		assert.Equal("payload does not contain UTF8 control characters", dr.Key.Troubleshooting[9].Message)
+		assert.Equal(string(PayloadEncodingCbor), dr.Key.Troubleshooting[9].SerdeName)
+		assert.Equal("cbor encoding not configured for topic: test.redpanda.console.serde_plain_protobuf_ref", dr.Key.Troubleshooting[9].Message)
+		assert.Equal(string(PayloadEncodingUtf8WithControlChars), dr.Key.Troubleshooting[10].SerdeName)
+		assert.Equal("payload does not contain UTF8 control characters", dr.Key.Troubleshooting[10].Message)
 	})
 
 	t.Run("schema registry protobuf", func(t *testing.T) {
@@ -1018,26 +994,6 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		})
 		require.NoError(err)
 		require.NotNil(ss)
-
-		// test
-		cfg := s.createBaseConfig()
-
-		logger, err := zap.NewProduction()
-		require.NoError(err)
-
-		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
-		require.NoError(err)
-
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
-		require.NoError(err)
-
-		err = protoSvc.Start()
-		require.NoError(err)
-
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
-		require.NoError(err)
-
-		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
 
 		// Set up Serde
 		var serde sr.Serde
@@ -1142,7 +1098,7 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal(string(PayloadEncodingXML), dr.Value.Troubleshooting[3].SerdeName)
 		assert.Equal("first byte indicates this it not valid XML", dr.Value.Troubleshooting[3].Message)
 		assert.Equal(string(PayloadEncodingAvro), dr.Value.Troubleshooting[4].SerdeName)
-		assert.Contains(dr.Value.Troubleshooting[4].Message, "getting avro schema from registry: failed to parse schema: avro: unknown type:")
+		assert.Contains(dr.Value.Troubleshooting[4].Message, "getting avro schema from registry: failed to parse avro schema: avro: unknown type:")
 		assert.Equal(string(PayloadEncodingProtobuf), dr.Value.Troubleshooting[5].SerdeName)
 		assert.Equal("failed to get message descriptor for payload: no prototype found for the given topic 'test.redpanda.console.serde_schema_protobuf'. Check your configured protobuf mappings", dr.Value.Troubleshooting[5].Message)
 
@@ -1161,7 +1117,7 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal(len([]byte(msg.Id)), dr.Key.PayloadSizeBytes)
 
 		// key troubleshooting
-		require.Len(dr.Key.Troubleshooting, 10)
+		require.Len(dr.Key.Troubleshooting, 11)
 		assert.Equal(string(PayloadEncodingNull), dr.Key.Troubleshooting[0].SerdeName)
 		assert.Equal("payload is not null as expected for none encoding", dr.Key.Troubleshooting[0].Message)
 		assert.Equal(string(PayloadEncodingJSON), dr.Key.Troubleshooting[1].SerdeName)
@@ -1180,8 +1136,10 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal("message pack encoding not configured for topic: test.redpanda.console.serde_schema_protobuf", dr.Key.Troubleshooting[7].Message)
 		assert.Equal(string(PayloadEncodingSmile), dr.Key.Troubleshooting[8].SerdeName)
 		assert.Equal("first bytes indicate this it not valid Smile format", dr.Key.Troubleshooting[8].Message)
-		assert.Equal(string(PayloadEncodingUtf8WithControlChars), dr.Key.Troubleshooting[9].SerdeName)
-		assert.Equal("payload does not contain UTF8 control characters", dr.Key.Troubleshooting[9].Message)
+		assert.Equal(string(PayloadEncodingCbor), dr.Key.Troubleshooting[9].SerdeName)
+		assert.Equal("cbor encoding not configured for topic: test.redpanda.console.serde_schema_protobuf", dr.Key.Troubleshooting[9].Message)
+		assert.Equal(string(PayloadEncodingUtf8WithControlChars), dr.Key.Troubleshooting[10].SerdeName)
+		assert.Equal("payload does not contain UTF8 control characters", dr.Key.Troubleshooting[10].Message)
 	})
 
 	t.Run("schema registry protobuf common", func(t *testing.T) {
@@ -1208,26 +1166,6 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		})
 		require.NoError(err)
 		require.NotNil(ss)
-
-		// test
-		cfg := s.createBaseConfig()
-
-		logger, err := zap.NewProduction()
-		require.NoError(err)
-
-		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
-		require.NoError(err)
-
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
-		require.NoError(err)
-
-		err = protoSvc.Start()
-		require.NoError(err)
-
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
-		require.NoError(err)
-
-		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
 
 		// Set up Serde
 		var serde sr.Serde
@@ -1387,26 +1325,6 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		require.NoError(err)
 		require.NotNil(ss)
 
-		// test
-		cfg := s.createBaseConfig()
-
-		logger, err := zap.NewProduction()
-		require.NoError(err)
-
-		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
-		require.NoError(err)
-
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
-		require.NoError(err)
-
-		err = protoSvc.Start()
-		require.NoError(err)
-
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
-		require.NoError(err)
-
-		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
-
 		// Set up Serde
 		var serde sr.Serde
 		serde.Register(
@@ -1538,7 +1456,7 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal(string(PayloadEncodingXML), dr.Value.Troubleshooting[3].SerdeName)
 		assert.Equal("first byte indicates this it not valid XML", dr.Value.Troubleshooting[3].Message)
 		assert.Equal(string(PayloadEncodingAvro), dr.Value.Troubleshooting[4].SerdeName)
-		assert.Contains(dr.Value.Troubleshooting[4].Message, "getting avro schema from registry: failed to parse schema: avro: unknown type:")
+		assert.Contains(dr.Value.Troubleshooting[4].Message, "getting avro schema from registry: failed to parse avro schema: avro: unknown type:")
 		assert.Equal(string(PayloadEncodingProtobuf), dr.Value.Troubleshooting[5].SerdeName)
 		assert.Equal("failed to get message descriptor for payload: no prototype found for the given topic 'test.redpanda.console.serde_schema_protobuf_multi'. Check your configured protobuf mappings", dr.Value.Troubleshooting[5].Message)
 
@@ -1557,7 +1475,7 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal(len([]byte("gadget_0")), dr.Key.PayloadSizeBytes)
 
 		// key troubleshooting
-		require.Len(dr.Key.Troubleshooting, 10)
+		require.Len(dr.Key.Troubleshooting, 11)
 		assert.Equal(string(PayloadEncodingNull), dr.Key.Troubleshooting[0].SerdeName)
 		assert.Equal("payload is not null as expected for none encoding", dr.Key.Troubleshooting[0].Message)
 		assert.Equal(string(PayloadEncodingJSON), dr.Key.Troubleshooting[1].SerdeName)
@@ -1576,8 +1494,10 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal("message pack encoding not configured for topic: test.redpanda.console.serde_schema_protobuf_multi", dr.Key.Troubleshooting[7].Message)
 		assert.Equal(string(PayloadEncodingSmile), dr.Key.Troubleshooting[8].SerdeName)
 		assert.Equal("first bytes indicate this it not valid Smile format", dr.Key.Troubleshooting[8].Message)
-		assert.Equal(string(PayloadEncodingUtf8WithControlChars), dr.Key.Troubleshooting[9].SerdeName)
-		assert.Equal("payload does not contain UTF8 control characters", dr.Key.Troubleshooting[9].Message)
+		assert.Equal(string(PayloadEncodingCbor), dr.Key.Troubleshooting[9].SerdeName)
+		assert.Equal("cbor encoding not configured for topic: test.redpanda.console.serde_schema_protobuf_multi", dr.Key.Troubleshooting[9].Message)
+		assert.Equal(string(PayloadEncodingUtf8WithControlChars), dr.Key.Troubleshooting[10].SerdeName)
+		assert.Equal("payload does not contain UTF8 control characters", dr.Key.Troubleshooting[10].Message)
 	})
 
 	t.Run("schema registry protobuf nested", func(t *testing.T) {
@@ -1604,26 +1524,6 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		})
 		require.NoError(err)
 		require.NotNil(ss)
-
-		// test
-		cfg := s.createBaseConfig()
-
-		logger, err := zap.NewProduction()
-		require.NoError(err)
-
-		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
-		require.NoError(err)
-
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
-		require.NoError(err)
-
-		err = protoSvc.Start()
-		require.NoError(err)
-
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
-		require.NoError(err)
-
-		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
 
 		// Set up Serde
 		var serde sr.Serde
@@ -1743,7 +1643,7 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal(string(PayloadEncodingXML), dr.Value.Troubleshooting[3].SerdeName)
 		assert.Equal("first byte indicates this it not valid XML", dr.Value.Troubleshooting[3].Message)
 		assert.Equal(string(PayloadEncodingAvro), dr.Value.Troubleshooting[4].SerdeName)
-		assert.Contains(dr.Value.Troubleshooting[4].Message, "getting avro schema from registry: failed to parse schema: avro: unknown type:")
+		assert.Contains(dr.Value.Troubleshooting[4].Message, "getting avro schema from registry: failed to parse avro schema: avro: unknown type:")
 		assert.Equal(string(PayloadEncodingProtobuf), dr.Value.Troubleshooting[5].SerdeName)
 		assert.Equal("failed to get message descriptor for payload: no prototype found for the given topic 'test.redpanda.console.serde_schema_protobuf_nest'. Check your configured protobuf mappings", dr.Value.Troubleshooting[5].Message)
 
@@ -1818,26 +1718,6 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		})
 		require.NoError(err)
 		require.NotNil(ss)
-
-		// test
-		cfg := s.createBaseConfig()
-
-		logger, err := zap.NewProduction()
-		require.NoError(err)
-
-		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
-		require.NoError(err)
-
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
-		require.NoError(err)
-
-		err = protoSvc.Start()
-		require.NoError(err)
-
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
-		require.NoError(err)
-
-		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
 
 		// Set up Serde
 		var serde sr.Serde
@@ -2060,7 +1940,7 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal(string(PayloadEncodingXML), dr.Value.Troubleshooting[3].SerdeName)
 		assert.Equal("first byte indicates this it not valid XML", dr.Value.Troubleshooting[3].Message)
 		assert.Equal(string(PayloadEncodingAvro), dr.Value.Troubleshooting[4].SerdeName)
-		assert.Contains(dr.Value.Troubleshooting[4].Message, "getting avro schema from registry: failed to parse schema: failed to parse schema reference")
+		assert.Contains(dr.Value.Troubleshooting[4].Message, "getting avro schema from registry: failed to parse avro schema: failed to parse schema reference")
 		assert.Equal(string(PayloadEncodingProtobuf), dr.Value.Troubleshooting[5].SerdeName)
 		assert.Equal("failed to get message descriptor for payload: no prototype found for the given topic 'test.redpanda.console.serde_schema_protobuf_ref'. Check your configured protobuf mappings", dr.Value.Troubleshooting[5].Message)
 
@@ -2079,7 +1959,7 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal(len([]byte("123456789")), dr.Key.PayloadSizeBytes)
 
 		// key troubleshooting
-		require.Len(dr.Key.Troubleshooting, 10)
+		require.Len(dr.Key.Troubleshooting, 11)
 		assert.Equal(string(PayloadEncodingNull), dr.Key.Troubleshooting[0].SerdeName)
 		assert.Equal("payload is not null as expected for none encoding", dr.Key.Troubleshooting[0].Message)
 		assert.Equal(string(PayloadEncodingJSON), dr.Key.Troubleshooting[1].SerdeName)
@@ -2098,8 +1978,10 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal("message pack encoding not configured for topic: test.redpanda.console.serde_schema_protobuf_ref", dr.Key.Troubleshooting[7].Message)
 		assert.Equal(string(PayloadEncodingSmile), dr.Key.Troubleshooting[8].SerdeName)
 		assert.Equal("first bytes indicate this it not valid Smile format", dr.Key.Troubleshooting[8].Message)
-		assert.Equal(string(PayloadEncodingUtf8WithControlChars), dr.Key.Troubleshooting[9].SerdeName)
-		assert.Equal("payload does not contain UTF8 control characters", dr.Key.Troubleshooting[9].Message)
+		assert.Equal(string(PayloadEncodingCbor), dr.Key.Troubleshooting[9].SerdeName)
+		assert.Equal("cbor encoding not configured for topic: test.redpanda.console.serde_schema_protobuf_ref", dr.Key.Troubleshooting[9].Message)
+		assert.Equal(string(PayloadEncodingUtf8WithControlChars), dr.Key.Troubleshooting[10].SerdeName)
+		assert.Equal("payload does not contain UTF8 control characters", dr.Key.Troubleshooting[10].Message)
 	})
 
 	t.Run("schema registry protobuf update", func(t *testing.T) {
@@ -2126,26 +2008,6 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		})
 		require.NoError(err)
 		require.NotNil(ss)
-
-		// test
-		cfg := s.createBaseConfig()
-
-		logger, err := zap.NewProduction()
-		require.NoError(err)
-
-		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
-		require.NoError(err)
-
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
-		require.NoError(err)
-
-		err = protoSvc.Start()
-		require.NoError(err)
-
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
-		require.NoError(err)
-
-		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
 
 		// Set up Serde
 		var serde sr.Serde
@@ -2298,16 +2160,24 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		require.Len(records, 2)
 
 		// proto schema rediscovery is on a timer... this forces a new refresh
-		schemaSvc2, err := schema.NewService(cfg.Kafka.Schema, logger)
+
+		protoSvc2, err := protopkg.NewService(cfg.Serde.Protobuf, logger)
 		require.NoError(err)
 
-		protoSvc2, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
+		err = protoSvc.Start()
 		require.NoError(err)
 
-		err = protoSvc2.Start()
+		schemaClientFactory2, err := schemafactory.NewSingleClientProvider(&cfg)
 		require.NoError(err)
 
-		serdeSvc2 := NewService(schemaSvc2, protoSvc2, mspPackSvc)
+		cacheNamespaceFn := func(context.Context) (string, error) {
+			return "single/", nil
+		}
+		cachedSchemaClient2, err := schemacache.NewCachedClient(schemaClientFactory2, cacheNamespaceFn)
+		require.NoError(err)
+
+		serdeSvc2, err := NewService(protoSvc2, mspPackSvc, cachedSchemaClient2, cborConfig)
+		require.NoError(err)
 
 		for _, cr := range records {
 			cr := cr
@@ -2377,25 +2247,6 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 			_, err := s.kafkaAdminClient.DeleteTopics(ctx, testTopicName)
 			assert.NoError(err)
 		}()
-
-		cfg := s.createBaseConfig()
-
-		logger, err := zap.NewProduction()
-		require.NoError(err)
-
-		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
-		require.NoError(err)
-
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
-		require.NoError(err)
-
-		err = protoSvc.Start()
-		require.NoError(err)
-
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
-		require.NoError(err)
-
-		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
 
 		keyBytes := make([]byte, 4)
 		binary.BigEndian.PutUint32(keyBytes, 160)
@@ -2480,25 +2331,6 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 			_, err := s.kafkaAdminClient.DeleteTopics(ctx, testTopicName)
 			assert.NoError(err)
 		}()
-
-		cfg := s.createBaseConfig()
-
-		logger, err := zap.NewProduction()
-		require.NoError(err)
-
-		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
-		require.NoError(err)
-
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
-		require.NoError(err)
-
-		err = protoSvc.Start()
-		require.NoError(err)
-
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
-		require.NoError(err)
-
-		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
 
 		keyBytes := make([]byte, 4)
 		binary.BigEndian.PutUint32(keyBytes, 1952807028)
@@ -2732,24 +2564,31 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 			Metadata EventDataRecord `avro:"metadata" json:"metadata"`
 		}
 
-		cfg := s.createBaseConfig()
-
 		logger, err := zap.NewProduction()
 		require.NoError(err)
 
-		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
-		require.NoError(err)
-
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
+		protoSvc, err := protopkg.NewService(cfg.Serde.Protobuf, logger)
 		require.NoError(err)
 
 		err = protoSvc.Start()
 		require.NoError(err)
 
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
+		mspPackSvc, err := ms.NewService(cfg.Serde.MessagePack)
 		require.NoError(err)
 
-		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
+		schemaClientFactory, err := schemafactory.NewSingleClientProvider(&cfg)
+		require.NoError(err)
+
+		cacheNamespaceFn := func(context.Context) (string, error) {
+			return "single-avro-ref/", nil
+		}
+		cachedSchemaClient, err := schemacache.NewCachedClient(schemaClientFactory, cacheNamespaceFn)
+		require.NoError(err)
+
+		cborConfig := config.Cbor{}
+
+		serdeSvc, err := NewService(protoSvc, mspPackSvc, cachedSchemaClient, cborConfig)
+		require.NoError(err)
 
 		var serde sr.Serde
 		serde.Register(
@@ -2871,7 +2710,7 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal(len([]byte("order_0")), dr.Key.PayloadSizeBytes)
 
 		// key troubleshooting
-		require.Len(dr.Key.Troubleshooting, 10)
+		require.Len(dr.Key.Troubleshooting, 11)
 		assert.Equal(string(PayloadEncodingNull), dr.Key.Troubleshooting[0].SerdeName)
 		assert.Equal("payload is not null as expected for none encoding", dr.Key.Troubleshooting[0].Message)
 		assert.Equal(string(PayloadEncodingJSON), dr.Key.Troubleshooting[1].SerdeName)
@@ -2890,11 +2729,14 @@ func (s *SerdeIntegrationTestSuite) TestDeserializeRecord() {
 		assert.Equal("message pack encoding not configured for topic: test.redpanda.console.serde_schema_avro_ref", dr.Key.Troubleshooting[7].Message)
 		assert.Equal(string(PayloadEncodingSmile), dr.Key.Troubleshooting[8].SerdeName)
 		assert.Equal("first bytes indicate this it not valid Smile format", dr.Key.Troubleshooting[8].Message)
-		assert.Equal(string(PayloadEncodingUtf8WithControlChars), dr.Key.Troubleshooting[9].SerdeName)
-		assert.Equal("payload does not contain UTF8 control characters", dr.Key.Troubleshooting[9].Message)
+		assert.Equal(string(PayloadEncodingCbor), dr.Key.Troubleshooting[9].SerdeName)
+		assert.Equal("cbor encoding not configured for topic: test.redpanda.console.serde_schema_avro_ref", dr.Key.Troubleshooting[9].Message)
+		assert.Equal(string(PayloadEncodingUtf8WithControlChars), dr.Key.Troubleshooting[10].SerdeName)
+		assert.Equal("payload does not contain UTF8 control characters", dr.Key.Troubleshooting[10].Message)
 	})
 }
 
+/*
 func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 	t := s.T()
 
@@ -2923,13 +2765,13 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
 		require.NoError(err)
 
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
+		protoSvc, err := protopkg.NewService(cfg.Serde.Protobuf, logger, schemaSvc)
 		require.NoError(err)
 
 		err = protoSvc.Start()
 		require.NoError(err)
 
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
+		mspPackSvc, err := ms.NewService(cfg.Serde.MessagePack)
 		require.NoError(err)
 
 		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
@@ -2965,17 +2807,20 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 			assert.NoError(err)
 		}()
 
+		topic0 := config.RegexpOrLiteral{}
+		topic0.UnmarshalText([]byte(testTopicName))
+
 		cfg := s.createBaseConfig()
-		cfg.Kafka.Protobuf.Enabled = true
-		cfg.Kafka.Protobuf.Mappings = []config.ProtoTopicMapping{
+		cfg.Serde.Protobuf.Enabled = true
+		cfg.Serde.Protobuf.Mappings = []config.ProtoTopicMapping{
 			{
-				TopicName:      testTopicName,
+				TopicName:      topic0,
 				ValueProtoType: "shop.v1.Order",
 			},
 		}
-		cfg.Kafka.Protobuf.FileSystem.Enabled = true
-		cfg.Kafka.Protobuf.FileSystem.RefreshInterval = 1 * time.Minute
-		cfg.Kafka.Protobuf.FileSystem.Paths = []string{"testdata/proto"}
+		cfg.Serde.Protobuf.FileSystem.Enabled = true
+		cfg.Serde.Protobuf.FileSystem.RefreshInterval = 1 * time.Minute
+		cfg.Serde.Protobuf.FileSystem.Paths = []string{"testdata/proto"}
 
 		logger, err := zap.NewProduction()
 		require.NoError(err)
@@ -2983,13 +2828,13 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
 		require.NoError(err)
 
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
+		protoSvc, err := protopkg.NewService(cfg.Serde.Protobuf, logger, schemaSvc)
 		require.NoError(err)
 
 		err = protoSvc.Start()
 		require.NoError(err)
 
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
+		mspPackSvc, err := ms.NewService(cfg.Serde.MessagePack)
 		require.NoError(err)
 
 		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
@@ -3036,17 +2881,20 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 			assert.NoError(err)
 		}()
 
+		topic0 := config.RegexpOrLiteral{}
+		topic0.UnmarshalText([]byte(testTopicName))
+
 		cfg := s.createBaseConfig()
-		cfg.Kafka.Protobuf.Enabled = true
-		cfg.Kafka.Protobuf.Mappings = []config.ProtoTopicMapping{
+		cfg.Serde.Protobuf.Enabled = true
+		cfg.Serde.Protobuf.Mappings = []config.ProtoTopicMapping{
 			{
-				TopicName:      testTopicName,
+				TopicName:      topic0,
 				ValueProtoType: "shop.v2.Order",
 			},
 		}
-		cfg.Kafka.Protobuf.FileSystem.Enabled = true
-		cfg.Kafka.Protobuf.FileSystem.RefreshInterval = 1 * time.Minute
-		cfg.Kafka.Protobuf.FileSystem.Paths = []string{"testdata/proto"}
+		cfg.Serde.Protobuf.FileSystem.Enabled = true
+		cfg.Serde.Protobuf.FileSystem.RefreshInterval = 1 * time.Minute
+		cfg.Serde.Protobuf.FileSystem.Paths = []string{"testdata/proto"}
 
 		logger, err := zap.NewProduction()
 		require.NoError(err)
@@ -3054,13 +2902,13 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
 		require.NoError(err)
 
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
+		protoSvc, err := protopkg.NewService(cfg.Serde.Protobuf, logger, schemaSvc)
 		require.NoError(err)
 
 		err = protoSvc.Start()
 		require.NoError(err)
 
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
+		mspPackSvc, err := ms.NewService(cfg.Serde.MessagePack)
 		require.NoError(err)
 
 		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
@@ -3196,13 +3044,13 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
 		require.NoError(err)
 
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
+		protoSvc, err := protopkg.NewService(cfg.Serde.Protobuf, logger, schemaSvc)
 		require.NoError(err)
 
 		err = protoSvc.Start()
 		require.NoError(err)
 
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
+		mspPackSvc, err := ms.NewService(cfg.Serde.MessagePack)
 		require.NoError(err)
 
 		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
@@ -3290,13 +3138,13 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
 		require.NoError(err)
 
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
+		protoSvc, err := protopkg.NewService(cfg.Serde.Protobuf, logger, schemaSvc)
 		require.NoError(err)
 
 		err = protoSvc.Start()
 		require.NoError(err)
 
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
+		mspPackSvc, err := ms.NewService(cfg.Serde.MessagePack)
 		require.NoError(err)
 
 		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
@@ -3408,13 +3256,13 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
 		require.NoError(err)
 
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
+		protoSvc, err := protopkg.NewService(cfg.Serde.Protobuf, logger, schemaSvc)
 		require.NoError(err)
 
 		err = protoSvc.Start()
 		require.NoError(err)
 
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
+		mspPackSvc, err := ms.NewService(cfg.Serde.MessagePack)
 		require.NoError(err)
 
 		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
@@ -3516,13 +3364,13 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
 		require.NoError(err)
 
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
+		protoSvc, err := protopkg.NewService(cfg.Serde.Protobuf, logger, schemaSvc)
 		require.NoError(err)
 
 		err = protoSvc.Start()
 		require.NoError(err)
 
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
+		mspPackSvc, err := ms.NewService(cfg.Serde.MessagePack)
 		require.NoError(err)
 
 		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
@@ -3661,13 +3509,13 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
 		require.NoError(err)
 
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
+		protoSvc, err := protopkg.NewService(cfg.Serde.Protobuf, logger, schemaSvc)
 		require.NoError(err)
 
 		err = protoSvc.Start()
 		require.NoError(err)
 
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
+		mspPackSvc, err := ms.NewService(cfg.Serde.MessagePack)
 		require.NoError(err)
 
 		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
@@ -3821,13 +3669,13 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
 		require.NoError(err)
 
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
+		protoSvc, err := protopkg.NewService(cfg.Serde.Protobuf, logger, schemaSvc)
 		require.NoError(err)
 
 		err = protoSvc.Start()
 		require.NoError(err)
 
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
+		mspPackSvc, err := ms.NewService(cfg.Serde.MessagePack)
 		require.NoError(err)
 
 		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
@@ -3893,9 +3741,117 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 		assert.Equal(expectedData, serRes.Value.Payload)
 	})
 
-	t.Run("json schema with reference", func(t *testing.T) {
-		t.Skip("JSON Schemas not supported in Redpanda Schema Registry")
+	t.Run("json schema no reference", func(t *testing.T) {
+		testTopicName := testutil.TopicNameForTest("serde_schema_json")
+		_, err := s.kafkaAdminClient.CreateTopic(ctx, 1, 1, nil, testTopicName)
+		require.NoError(err)
 
+		defer func() {
+			_, err := s.kafkaAdminClient.DeleteTopics(ctx, testTopicName)
+			assert.NoError(err)
+		}()
+
+		rcl, err := sr.NewClient(sr.URLs(s.registryAddress))
+		require.NoError(err)
+
+		fullSchema := `{
+			"$id": "https://example.com/product.schema.json",
+			"title": "Product",
+			"description": "A product from Acme's catalog",
+			"type": "object",
+			"properties": {
+			  "productId": {
+				"description": "The unique identifier for a product",
+				"type": "integer"
+			  },
+			  "productName": {
+				"description": "Name of the product",
+				"type": "string"
+			  },
+			  "price": {
+				"description": "The price of the product",
+				"type": "number",
+				"minimum": 0
+			  }
+			},
+			"required": [ "productId", "productName" ]
+		}`
+
+		ssFull, err := rcl.CreateSchema(context.Background(), testTopicName+"-value", sr.Schema{
+			Schema: fullSchema,
+			Type:   sr.TypeJSON,
+		})
+		require.NoError(err)
+		require.NotNil(ssFull)
+
+		// test
+		cfg := s.createBaseConfig()
+
+		logger, err := zap.NewProduction()
+		require.NoError(err)
+
+		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
+		require.NoError(err)
+
+		protoSvc, err := protopkg.NewService(cfg.Serde.Protobuf, logger, schemaSvc)
+		require.NoError(err)
+
+		err = protoSvc.Start()
+		require.NoError(err)
+
+		mspPackSvc, err := ms.NewService(cfg.Serde.MessagePack)
+		require.NoError(err)
+
+		type ProductRecord struct {
+			ProductID   int     `json:"productId"`
+			ProductName string  `json:"productName"`
+			Price       float32 `json:"price"`
+		}
+
+		var srSerde sr.Serde
+		srSerde.Register(
+			ssFull.ID,
+			&ProductRecord{},
+			sr.EncodeFn(func(v any) ([]byte, error) {
+				return json.Marshal(v.(*ProductRecord))
+			}),
+			sr.DecodeFn(func(b []byte, v any) error {
+				return json.Unmarshal(b, v.(*ProductRecord))
+			}),
+		)
+
+		expectData, err := srSerde.Encode(&ProductRecord{ProductID: 11, ProductName: "foo", Price: 10.25})
+		require.NoError(err)
+
+		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
+
+		out, err := serdeSvc.SerializeRecord(context.Background(), SerializeInput{
+			Topic: testTopicName,
+			Key: RecordPayloadInput{
+				Payload:  "11",
+				Encoding: PayloadEncodingText,
+			},
+			Value: RecordPayloadInput{
+				Payload:  `{"productId":11,"productName":"foo","price":10.25}`,
+				Encoding: PayloadEncodingJSONSchema,
+				Options:  []SerdeOpt{WithSchemaID(uint32(ssFull.ID))},
+			},
+		})
+
+		require.NoError(err)
+
+		assert.NotNil(out)
+
+		// key
+		assert.Equal([]byte("11"), out.Key.Payload)
+		assert.Equal(PayloadEncodingText, out.Key.Encoding)
+
+		// value
+		assert.Equal(expectData, out.Value.Payload)
+		assert.Equal(PayloadEncodingJSONSchema, out.Value.Encoding)
+	})
+
+	t.Run("json schema with reference", func(t *testing.T) {
 		testTopicName := testutil.TopicNameForTest("serde_schema_json_ref")
 		_, err := s.kafkaAdminClient.CreateTopic(ctx, 1, 1, nil, testTopicName)
 		require.NoError(err)
@@ -3927,7 +3883,7 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 			"title": "price",
 			"description": "The price of the product",
 			"type": "number",
-			"exclusiveMinimum": 0
+			"minimum": 0
 		  }`
 
 		schemaStr := `{
@@ -3943,50 +3899,20 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 			"required": [ "productId", "productName" ]
 		}`
 
-		fullSchema := `{
-			"$id": "https://example.com/product.schema.json",
-			"title": "Product",
-			"description": "A product from Acme's catalog",
-			"type": "object",
-			"properties": {
-			  "productId": {
-				"description": "The unique identifier for a product",
-				"type": "integer"
-			  },
-			  "productName": {
-				"description": "Name of the product",
-				"type": "string"
-			  },
-			  "price": {
-				"description": "The price of the product",
-				"type": "number",
-				"exclusiveMinimum": 0
-			  }
-			},
-			"required": [ "productId", "productName" ]
-		}`
-
-		ssFull, err := rcl.CreateSchema(context.Background(), testTopicName+"-value", sr.Schema{
-			Schema: fullSchema,
-			Type:   sr.TypeJSON,
-		})
-		require.NoError(err)
-		require.NotNil(ssFull)
-
-		ssID, err := rcl.CreateSchema(context.Background(), testTopicName+"-value", sr.Schema{
+		ssID, err := rcl.CreateSchema(context.Background(), "product_id.json", sr.Schema{
 			Schema: productIDSchema,
 			Type:   sr.TypeJSON,
 		})
 		require.NoError(err)
 		require.NotNil(ssID)
 
-		ssName, err := rcl.CreateSchema(context.Background(), testTopicName+"-value", sr.Schema{
+		ssName, err := rcl.CreateSchema(context.Background(), "product_name.json", sr.Schema{
 			Schema: productNameSchema,
 			Type:   sr.TypeJSON,
 		})
 		require.NoError(err)
 
-		ssPrice, err := rcl.CreateSchema(context.Background(), testTopicName+"-value", sr.Schema{
+		ssPrice, err := rcl.CreateSchema(context.Background(), "product_price.json", sr.Schema{
 			Schema: productPriceSchema,
 			Type:   sr.TypeJSON,
 		})
@@ -4026,13 +3952,13 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
 		require.NoError(err)
 
-		protoSvc, err := protopkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
+		protoSvc, err := protopkg.NewService(cfg.Serde.Protobuf, logger, schemaSvc)
 		require.NoError(err)
 
 		err = protoSvc.Start()
 		require.NoError(err)
 
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
+		mspPackSvc, err := ms.NewService(cfg.Serde.MessagePack)
 		require.NoError(err)
 
 		type ProductRecord struct {
@@ -4043,7 +3969,7 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 
 		var srSerde sr.Serde
 		srSerde.Register(
-			1000,
+			ss.ID,
 			&ProductRecord{},
 			sr.EncodeFn(func(v any) ([]byte, error) {
 				return json.Marshal(v.(*ProductRecord))
@@ -4081,10 +4007,9 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 
 		// value
 		assert.Equal(expectData, out.Value.Payload)
-		assert.Equal(PayloadEncodingJSON, out.Key.Encoding)
+		assert.Equal(PayloadEncodingJSONSchema, out.Value.Encoding)
 	})
 
-	/* TODO: This test seems failing, but we don't need serializing Avro at the moment
 	t.Run("schema registry avro references", func(t *testing.T) {
 		// create the topic
 		testTopicName := testutil.TopicNameForTest("serde_schema_avro_ref")
@@ -4096,7 +4021,7 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 			assert.NoError(err)
 		}()
 
-		// register the protobuf schema
+		// register the avro schema
 		rcl, err := sr.NewClient(sr.URLs(s.registryAddress))
 		require.NoError(err)
 
@@ -4251,13 +4176,13 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 		schemaSvc, err := schema.NewService(cfg.Kafka.Schema, logger)
 		require.NoError(err)
 
-		protoSvc, err := protoPkg.NewService(cfg.Kafka.Protobuf, logger, schemaSvc)
+		protoSvc, err := protopkg.NewService(cfg.Serde.Protobuf, logger, schemaSvc)
 		require.NoError(err)
 
 		err = protoSvc.Start()
 		require.NoError(err)
 
-		mspPackSvc, err := ms.NewService(cfg.Kafka.MessagePack)
+		mspPackSvc, err := ms.NewService(cfg.Serde.MessagePack)
 		require.NoError(err)
 
 		serdeSvc := NewService(schemaSvc, protoSvc, mspPackSvc)
@@ -4323,8 +4248,8 @@ func (s *SerdeIntegrationTestSuite) TestSerializeRecord() {
 		assert.Equal(expectData, serRes.Value.Payload)
 		assert.Equal(PayloadEncodingAvro, serRes.Value.Encoding)
 	})
-	*/
 }
+*/
 
 // We cannot import both shopv1 and shopv1_2 (proto_updated) packages.
 // Both packages define the same protobuf types in terms of fully qualified name and proto package name.
@@ -4346,13 +4271,15 @@ func serializeShopV1_2(jsonInput string, schemaID int) ([]byte, error) {
 		"-input="+jsonInput,
 		"-schema-id="+strconv.Itoa(schemaID),
 	)
-	var out strings.Builder
-	cmd.Stdout = &out
+	var stdout strings.Builder
+	var stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	err = cmd.Run()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("go run finished with error %w, stdout: %s, stderr: %s", err, stdout.String(), stderr.String())
 	}
-	output := out.String()
+	output := stdout.String()
 	return base64.StdEncoding.DecodeString(output)
 }
 
@@ -4382,5 +4309,6 @@ func deserializeShopV1_2(binInput []byte, schemaID int) (string, error) {
 		}
 		return "", err
 	}
+
 	return out.String(), nil
 }

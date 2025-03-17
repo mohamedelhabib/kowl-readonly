@@ -28,24 +28,30 @@ type Service struct {
 }
 
 // NewService creates the new serde service.
-func NewService(schemaService *schema.Service, protoSvc *proto.Service, msgPackSvc *msgpack.Service) *Service {
+func NewService(
+	protoSvc *proto.Service,
+	msgPackSvc *msgpack.Service,
+	cachedSchemaClient schema.Client,
+	cborConfig config.Cbor,
+) (*Service, error) {
 	return &Service{
 		SerDes: []Serde{
 			NullSerde{},
 			JSONSerde{},
-			JSONSchemaSerde{SchemaSvc: schemaService},
+			JSONSchemaSerde{schemaClient: cachedSchemaClient},
 			XMLSerde{},
-			AvroSerde{SchemaSvc: schemaService},
+			AvroSerde{schemaClient: cachedSchemaClient},
 			ProtobufSerde{ProtoSvc: protoSvc},
-			ProtobufSchemaSerde{ProtoSvc: protoSvc},
+			ProtobufSchemaSerde{schemaClient: cachedSchemaClient},
 			MsgPackSerde{MsgPackService: msgPackSvc},
 			SmileSerde{},
+			CborSerde{Config: cborConfig},
 			UTF8Serde{},
 			TextSerde{},
 			UintSerde{},
 			BinarySerde{},
 		},
-	}
+	}, nil
 }
 
 // DeserializeRecord tries to deserialize a Kafka record into a struct that
@@ -107,6 +113,11 @@ func (s *Service) deserializePayload(ctx context.Context, record *kgo.Record, pa
 			break
 		}
 
+		if doSpecificEncoding {
+			// If the specific encoding failed, it wouldn't be set. Hence, we set it here.
+			rp.Encoding = serdeEncoding
+		}
+
 		troubleshooting = append(troubleshooting, TroubleshootingReport{
 			SerdeName: string(serde.Name()),
 			Message:   err.Error(),
@@ -125,7 +136,8 @@ func (s *Service) deserializePayload(ctx context.Context, record *kgo.Record, pa
 		rp.NormalizedPayload = nil
 	}
 
-	if opts.Troubleshoot || rp.Encoding == PayloadEncodingBinary {
+	specificEncodingFailed := doSpecificEncoding && len(troubleshooting) > 0
+	if opts.Troubleshoot || rp.Encoding == PayloadEncodingBinary || specificEncodingFailed {
 		rp.Troubleshooting = troubleshooting
 	}
 

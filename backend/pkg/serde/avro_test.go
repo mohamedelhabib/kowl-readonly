@@ -21,9 +21,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sr"
-	"go.uber.org/zap"
 
 	"github.com/redpanda-data/console/backend/pkg/config"
+	schemafactory "github.com/redpanda-data/console/backend/pkg/factory/schema"
 	"github.com/redpanda-data/console/backend/pkg/schema"
 )
 
@@ -68,7 +68,17 @@ func TestAvroSerde_DeserializePayload(t *testing.T) {
 			}
 			return
 		default:
+			w.Header().Set("content-type", "application/vnd.schemaregistry.v1+json")
 			w.WriteHeader(http.StatusNotFound)
+			resp := map[string]any{
+				"error_code": 40403,
+				"message":    "Schema x not found",
+			}
+			enc := json.NewEncoder(w)
+			if enc.Encode(resp) != nil {
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				return
+			}
 			return
 		}
 	}))
@@ -111,17 +121,21 @@ func TestAvroSerde_DeserializePayload(t *testing.T) {
 	msgData2, err := srSerde2.Encode(&in)
 	require.NoError(t, err)
 
-	// setup schema service
-	logger, _ := zap.NewProduction()
-	s, err := schema.NewService(config.Schema{
-		Enabled: true,
-		URLs:    []string{ts.URL},
-	}, logger)
+	singleClientProvider, err := schemafactory.NewSingleClientProvider(&config.Config{
+		SchemaRegistry: config.Schema{
+			Enabled: true,
+			URLs:    []string{ts.URL},
+		},
+	})
+	require.NoError(t, err)
+	schemaCachedClient, err := schema.NewCachedClient(singleClientProvider, func(context.Context) (string, error) {
+		return "single/", nil
+	})
 	require.NoError(t, err)
 
 	// serde
 	serde := AvroSerde{
-		SchemaSvc: s,
+		schemaClient: schemaCachedClient,
 	}
 
 	tests := []struct {
@@ -164,7 +178,7 @@ func TestAvroSerde_DeserializePayload(t *testing.T) {
 				Value: []byte{0, 1, 2, 3},
 			},
 			payloadType: PayloadTypeValue,
-			validationFunc: func(t *testing.T, payload RecordPayload, err error) {
+			validationFunc: func(t *testing.T, _ RecordPayload, err error) {
 				assert.Error(t, err)
 				assert.Equal(t, "payload size is <= 5", err.Error())
 			},
@@ -175,7 +189,7 @@ func TestAvroSerde_DeserializePayload(t *testing.T) {
 				Value: []byte{1, 2, 3, 4, 5, 6, 7},
 			},
 			payloadType: PayloadTypeValue,
-			validationFunc: func(t *testing.T, payload RecordPayload, err error) {
+			validationFunc: func(t *testing.T, _ RecordPayload, err error) {
 				assert.Error(t, err)
 				assert.Equal(t, "incorrect magic byte for avro", err.Error())
 			},
@@ -186,9 +200,9 @@ func TestAvroSerde_DeserializePayload(t *testing.T) {
 				Value: msgData2,
 			},
 			payloadType: PayloadTypeValue,
-			validationFunc: func(t *testing.T, payload RecordPayload, err error) {
+			validationFunc: func(t *testing.T, _ RecordPayload, err error) {
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "getting avro schema from registry: failed to get schema from registry: get schema by id request failed")
+				assert.Contains(t, err.Error(), "failed to fetch schema from schema registry: Schema x not found")
 			},
 		},
 	}
@@ -244,7 +258,7 @@ func TestAvroSerde_SerializeObject(t *testing.T) {
 				return
 			}
 			return
-		case srListSchemasPath:
+		case srListSchemasPath, srListSchemasPath + "?deleted=true":
 			type SchemaVersionedResponse struct {
 				Subject  string `json:"subject"`
 				SchemaID int    `json:"id"`
@@ -271,7 +285,7 @@ func TestAvroSerde_SerializeObject(t *testing.T) {
 				return
 			}
 			return
-		case srListSubjectsPath:
+		case srListSubjectsPath, srListSubjectsPath + "?deleted=true":
 			w.Header().Set("content-type", "application/vnd.schemaregistry.v1+json")
 			resp := []string{"test-subject-avro-v1"}
 			enc := json.NewEncoder(w)
@@ -287,13 +301,16 @@ func TestAvroSerde_SerializeObject(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	logger, err := zap.NewProduction()
+	singleClientProvider, err := schemafactory.NewSingleClientProvider(&config.Config{
+		SchemaRegistry: config.Schema{
+			Enabled: true,
+			URLs:    []string{ts.URL},
+		},
+	})
 	require.NoError(t, err)
-
-	schemaSvc, err := schema.NewService(config.Schema{
-		Enabled: true,
-		URLs:    []string{ts.URL},
-	}, logger)
+	schemaCachedClient, err := schema.NewCachedClient(singleClientProvider, func(context.Context) (string, error) {
+		return "single/", nil
+	})
 	require.NoError(t, err)
 
 	type SimpleRecord struct {
@@ -302,7 +319,7 @@ func TestAvroSerde_SerializeObject(t *testing.T) {
 	}
 
 	t.Run("no schema id", func(t *testing.T) {
-		serde := AvroSerde{SchemaSvc: schemaSvc}
+		serde := AvroSerde{schemaClient: schemaCachedClient}
 
 		b, err := serde.SerializeObject(context.Background(), SimpleRecord{A: 27, B: "foo"}, PayloadTypeValue)
 		require.Error(t, err)
@@ -311,16 +328,16 @@ func TestAvroSerde_SerializeObject(t *testing.T) {
 	})
 
 	t.Run("invalid schema id", func(t *testing.T) {
-		serde := AvroSerde{SchemaSvc: schemaSvc}
+		serde := AvroSerde{schemaClient: schemaCachedClient}
 
 		b, err := serde.SerializeObject(context.Background(), SimpleRecord{A: 27, B: "foo"}, PayloadTypeValue, WithSchemaID(5567))
 		require.Error(t, err)
-		assert.Equal(t, "getting avro schema from registry: failed to get schema from registry: get schema by id request failed: Status code 404", err.Error())
+		assert.Contains(t, err.Error(), "getting avro schema from registry: failed to fetch schema from schema registry:")
 		assert.Nil(t, b)
 	})
 
 	t.Run("dynamic", func(t *testing.T) {
-		serde := AvroSerde{SchemaSvc: schemaSvc}
+		serde := AvroSerde{schemaClient: schemaCachedClient}
 
 		var srSerde sr.Serde
 		srSerde.Register(
@@ -344,7 +361,7 @@ func TestAvroSerde_SerializeObject(t *testing.T) {
 	})
 
 	t.Run("string json", func(t *testing.T) {
-		serde := AvroSerde{SchemaSvc: schemaSvc}
+		serde := AvroSerde{schemaClient: schemaCachedClient}
 
 		var srSerde sr.Serde
 		srSerde.Register(
@@ -368,7 +385,7 @@ func TestAvroSerde_SerializeObject(t *testing.T) {
 	})
 
 	t.Run("invalid json", func(t *testing.T) {
-		serde := AvroSerde{SchemaSvc: schemaSvc}
+		serde := AvroSerde{schemaClient: schemaCachedClient}
 
 		b, err := serde.SerializeObject(context.Background(), `{"p":"q","r":12}`, PayloadTypeValue, WithSchemaID(2000))
 		require.Error(t, err)
@@ -377,7 +394,7 @@ func TestAvroSerde_SerializeObject(t *testing.T) {
 	})
 
 	t.Run("byte json", func(t *testing.T) {
-		serde := AvroSerde{SchemaSvc: schemaSvc}
+		serde := AvroSerde{schemaClient: schemaCachedClient}
 
 		var srSerde sr.Serde
 		srSerde.Register(

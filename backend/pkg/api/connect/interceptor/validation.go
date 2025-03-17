@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 
+	commonv1alpha1 "buf.build/gen/go/redpandadata/common/protocolbuffers/go/redpanda/api/common/v1alpha1"
 	"connectrpc.com/connect"
 	"github.com/bufbuild/protovalidate-go"
 	"go.uber.org/zap"
@@ -22,7 +23,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	apierrors "github.com/redpanda-data/console/backend/pkg/api/connect/errors"
-	commonv1alpha1 "github.com/redpanda-data/console/backend/pkg/protogen/redpanda/api/common/v1alpha1"
 )
 
 // ValidationInterceptor validates incoming requests against the provided validation.
@@ -68,8 +68,8 @@ func (in *ValidationInterceptor) WrapUnary(next connect.UnaryFunc) connect.Unary
 			var fieldViolations []*errdetails.BadRequest_FieldViolation
 			for _, violation := range validationErr.Violations {
 				fieldViolationErr := &errdetails.BadRequest_FieldViolation{
-					Field:       violation.FieldPath,
-					Description: violation.Message,
+					Field:       protovalidate.FieldPathString(violation.Proto.GetField()),
+					Description: violation.Proto.GetMessage(),
 				}
 				fieldViolations = append(fieldViolations, fieldViolationErr)
 			}

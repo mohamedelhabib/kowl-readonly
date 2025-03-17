@@ -28,13 +28,12 @@ import (
 
 	"github.com/redpanda-data/console/backend/pkg/config"
 	protopkg "github.com/redpanda-data/console/backend/pkg/proto"
-	"github.com/redpanda-data/console/backend/pkg/schema"
 	shopv1 "github.com/redpanda-data/console/backend/pkg/serde/testdata/proto/gen/shop/v1"
 )
 
 func TestProtobufSerde_DeserializePayload(t *testing.T) {
 	// NO OP schema registry API server
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer ts.Close()
@@ -42,18 +41,13 @@ func TestProtobufSerde_DeserializePayload(t *testing.T) {
 	logger, err := zap.NewProduction()
 	require.NoError(t, err)
 
-	schemaSvc, err := schema.NewService(config.Schema{
-		Enabled: false,
-		URLs:    []string{ts.URL},
-	}, logger)
-	require.NoError(t, err)
+	topic0 := config.RegexpOrLiteral{}
+	topic0.UnmarshalText([]byte("protobuf_serde_test_orders"))
+	topic1 := config.RegexpOrLiteral{}
+	topic1.UnmarshalText([]byte("protobuf_serde_test_orders_2"))
 
 	protoSvc, err := protopkg.NewService(config.Proto{
 		Enabled: true,
-		SchemaRegistry: config.ProtoSchemaRegistry{
-			Enabled:         false,
-			RefreshInterval: 5 * time.Minute,
-		},
 		FileSystem: config.Filesystem{
 			Enabled:         true,
 			Paths:           []string{"testdata/proto"},
@@ -61,16 +55,16 @@ func TestProtobufSerde_DeserializePayload(t *testing.T) {
 		},
 		Mappings: []config.ProtoTopicMapping{
 			{
-				TopicName:      "protobuf_serde_test_orders",
+				TopicName:      topic0,
 				ValueProtoType: "shop.v1.Order",
 			},
 			{
-				TopicName:      "protobuf_serde_test_orders_2",
+				TopicName:      topic1,
 				KeyProtoType:   "shop.v1.Order",
 				ValueProtoType: "shop.v1.Order",
 			},
 		},
-	}, logger, schemaSvc)
+	}, logger)
 	require.NoError(t, err)
 
 	err = protoSvc.Start()
@@ -155,7 +149,7 @@ func TestProtobufSerde_DeserializePayload(t *testing.T) {
 				Topic: "protobuf_serde_test_orders_123",
 			},
 			payloadType: PayloadTypeKey,
-			validationFunc: func(t *testing.T, payload RecordPayload, err error) {
+			validationFunc: func(t *testing.T, _ RecordPayload, err error) {
 				require.Error(t, err)
 				assert.Equal(t, "failed to get message descriptor for payload: no prototype found for the given topic 'protobuf_serde_test_orders_123'. Check your configured protobuf mappings", err.Error())
 			},
@@ -174,12 +168,13 @@ func TestProtobufSerde_SerializeObject(t *testing.T) {
 	logger, err := zap.NewProduction()
 	require.NoError(t, err)
 
+	topic0 := config.RegexpOrLiteral{}
+	topic0.UnmarshalText([]byte("protobuf_serde_test_orders"))
+	topic1 := config.RegexpOrLiteral{}
+	topic1.UnmarshalText([]byte("protobuf_serde_test_orders_2"))
+
 	testProtoSvc, err := protopkg.NewService(config.Proto{
 		Enabled: true,
-		SchemaRegistry: config.ProtoSchemaRegistry{
-			Enabled:         false,
-			RefreshInterval: 5 * time.Minute,
-		},
 		FileSystem: config.Filesystem{
 			Enabled:         true,
 			Paths:           []string{"testdata/proto"},
@@ -187,16 +182,16 @@ func TestProtobufSerde_SerializeObject(t *testing.T) {
 		},
 		Mappings: []config.ProtoTopicMapping{
 			{
-				TopicName:      "protobuf_serde_test_orders",
+				TopicName:      topic0,
 				ValueProtoType: "shop.v1.Order",
 			},
 			{
-				TopicName:      "protobuf_serde_test_orders_2",
+				TopicName:      topic1,
 				KeyProtoType:   "shop.v1.Order",
 				ValueProtoType: "shop.v1.Order",
 			},
 		},
-	}, logger, nil)
+	}, logger)
 	require.NoError(t, err)
 
 	err = testProtoSvc.Start()

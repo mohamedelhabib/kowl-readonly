@@ -1,35 +1,159 @@
 # Changelog
 
+## v2.8.4 / 2025-03-13
+
+- [CHANGE] Move to bun package manager for frontend builds.
+- [SECURITY] Update go-git module to address security issue.
+- [SECURITY] Update golang.org/x/net module to address security issue.
+- [SECURITY] Upgrade golang.org/x/oauth2 to fix security issue.
+
+## v2.8.3 / 2025-02-27
+
+- [IMPROVEMENT] Improvements to memory consumption and performance of Protocol Buffer parsing.
+- [IMPROVEMENT] Add capability to deserialize records that use deleted schemas.
+- [IMPROVEMENT] Show default config for topic configurations.
+- [IMPROVEMENT] For push down filters, pass JavaScript Date for record timestamp to filter function.
+- [BUFGIX] Fix UX bug that prevented records from being downloaded.
+- [BUFGIX] Fix a bug that prevented Console from starting up with an expired license when no enterprise features were enabled.
+
+## v2.8.2 / 2025-01-10
+
+- [SECURITY] Update `github.com/go-git/go-git/v5` to fix security issue [CVE-2025-21614](https://nvd.nist.gov/vuln/detail/CVE-2025-21614).
+
+## v2.8.1 / 2024-12-18
+
+- [SECURITY] Built with Go 1.23.4 to fix [CVE-2024-45337](https://nvd.nist.gov/vuln/detail/CVE-2024-45337).
+- [IMPROVEMENT] Add "Try Again" button if debug bundle creation failed.
+- [BUFGIX] Properly handle paths that require escaping in environments that use URL rewriting [1526](https://github.com/redpanda-data/console/pull/1526). 
+
+## v2.8.0 / 2024-12-03
+
+- [FEATURE] Add debug bundle support, enabling Console to now generate cluster wide debug bundles on Redpanda clusters.
+- [IMPROVEMENT] Add support for CBOR payload deserialization.
+- [IMPROVEMENT] Make git max clone depth configurable.
+- [IMPROVEMENT] Redpanda Connect in Cloud functionality and usability improvements.
+- [IMPROVEMENT] Relax regex restriction to allow greater set of characters for Role names.
+- [CHANGE] Ability to upload Redpanda enterprise licenses via Console, as well as loading licenses from a Redpanda cluster.
+- [BUFGIX] Fix the grammar in the partition error message
+- [BUFGIX] Fix a rendering error if schemaVersion is requested but not supported.
+- [BUFGIX] Fix a bug with topic creation under certain scenarios.
+- [BUFGIX] Fix topic list sorting to use partition count.
+- [SECURITY] Update elliptic package in frontend.
+
+## v2.7.2 / 2024-09-06
+
+- [SECURITY] Built with Go 1.23.1 which comes with secure CipherSuites by default.
+- [IMPROVEMENT] Minor visual improvements (e.g. padding on the loading spinner in the breadcrumb).
+- [BUGFIX] When updating or creating ACLs in some cases the Update/Create button remained disabled due to invalid form validation.
+- [BUGFIX] Fix resize loop of the Monacco editor in Safari.
+- [BUGFIX] Editing a consumer group by timestamp wasn't possible due to a z-index issue with the datepicker.
+
+## v2.7.1 / 2024-08-12
+
+- [IMPROVEMENT] Improve descriptions and columns on Users, ACLs, Roles and Permissions List tab on the security page.
+- [BUGFIX] List all ACL and role permissions in user details page. It used to be permissions inherited via roles only.
+- [BUGFIX] Selecting a specific deserializer shows a proper error message if it fails.
+- [BUGFIX] Fix deserializer for the `__consumer_offsets` topic.
+
+## v2.7.0 / 2024-08-01
+
+- [FEATURE] Add support for managing data transforms in Redpanda.
+- [IMPROVEMENT] Reworked message viewer UX to streamline inspecting Kafka records and also fit well for smaller screen sizes.
+- [IMPROVEMENT] Improved statistics bar on topics details page.
+- [IMPROVEMENT] Better handling for very long resource names such as topic names across all pages.
+- [IMPROVEMENT] Add support for mapping protobuf types to topic names in a more flexible fashion using regex.
+- [IMPROVEMENT] Add hint that the message count is just an estimate and not guaranteed to be accurate.
+- [IMPROVEMENT] Still render the schema registry pages when Console is running with a schema registry that does not support the /types endpoint.
+- [IMPROVEMENT] Add support for submodules when using Git as a source for protobuf schemas.
+- [IMPROVEMENT] Seperate users and ACLs in the security pages to avoid confusion between users and principals.
+- [CHANGE] Remove external news / links from the resources section on the overview page.
+- [BUGFIX] Refresh AWS credentials after token expiration when using MSK IAM Auth.
+- [BUGFIX] Fix size calculation for log dirs when using shared storages such as S3 / GCS. Applies to topic sizes and broker log dir sizes.
+- [BUGFIX] In rare cases decoding Avro records caused a panic. This was fixed by updating the Avro library.
+- [BUGFIX] The frontend application used to request a non-existent schema with id: 0 causing an unnecessary backend request.
+- [BUGFIX] On the create schema page the Create button was sometimes not disabled even though required field input was not yet provided.
+- [BUGFIX] Exponentionally backoff Redpanda adminapi requests if the API is unreachable.
+- [BUGFIX] Fix datepicker conversion between UTC and Local times for listing messages and editing group offsets by timestamp.
+- [BUGFIX] Schema validation errors were not surfaced in the UI.
+
+## v2.6.1 / 2024-07-10
+
+- [SECURITY] update gorilla/schema to address CVE-2024-37298.
+- [SECURITY] update grpc to v1.65.0 to avoid OSV:GHSA-XR7Q-JX4M-X55M.
+- [SECURITY] new build to address CVE-2024-6387.
+
+## v2.6.0 / 2024-05-30
+
+- [FEATURE] Add Redpanda Connect management.
+
+## v2.5.2 / 2024-04-30
+
+- [CHANGE] Update dependencies.
+
+## v2.5.1 / 2024-04-26
+
+- [SECURITY] Update Go to version 1.22.2.
+
+## v2.5.0 / 2024-04-26
+
+- [FEATURE] Add Redpanda Role management.
+
+## v2.4.7 / 2024-04-23
+
+- [CHANGE] Update dependencies.
+- [BUGFIX] Allow `ListMessages` and `PublishMessage` calls in non-Cloud deployments.
+
+## v2.4.6 / 2024-04-09
+
+- [SECURITY] Update Go to v1.22.2 to address [CVE-2023-45288]([https://nvd.nist.gov/vuln/detail](https://nvd.nist.gov/vuln/detail)/CVE-2023-45288)
+- [SECURITY] Authenticated Console users with assigned viewer permissions were able to successfully perform operations that would require admin permissions (e.g. creating ACLs). This does not affect users in Redpanda Cloud.
+- [BUGFIX] Fix empty toast feedback when reassigning partitions in the UI.
+- [IMPROVEMENT] Surface dynamic broker error messages in the UI if operations such as creating topics failed.
+
+## v2.4.5 / 2024-03-06
+
+- [SECURITY] Update Go to v1.22.1 to address multiple [CVEs](https://groups.google.com/g/golang-announce/c/5pwGVUPoMbg).
+- [IMPROVEMENT] Wrap long topic names instead of truncating them in the topics list [#1159](https://github.com/redpanda-data/console/pull/1159).
+
+## v2.4.4 / 2024-03-04
+
+- [BUGFIX] Fix for glob patterns for adapting the preview in the list messages table [#1116](https://github.com/redpanda-data/console/pull/1116).
+- [BUGFIX] Show last available page in paginated search results to avoid blank page content [#1121](https://github.com/redpanda-data/console/pull/1121).
+- [BUGFIX] Send heartbeats in HTTP stream to load messages to avoid idle timeouts from LoadBalancers and reverse proxies [#1109](https://github.com/redpanda-data/console/pull/1109).
+- [IMPROVEMENT] Better handling for long resource names (e.g. topic names) in the UI [#1124](https://github.com/redpanda-data/console/pull/1124).
+- [IMPROVEMENT] Add option to download messages that are too large to be displayed by default [#1129](https://github.com/redpanda-data/console/pull/1129).
+- [IMPROVEMENT] Add `offset.lag.max` option to advanced configuration in the MirrorMaker2 connector setup [#1131](https://github.com/redpanda-data/console/pull/1131).
+
 ## v2.4.3 / 2024-02-08
 
-- [FIX] Persist pagination settings in local storage [#1095](https://github.com/redpanda-data/console/pull/1095).
-- [FIX] Re-add search bar to filter connectors by their name [#1094](https://github.com/redpanda-data/console/pull/1094).
-- [FIX] Only update the custom offset in the message search if it's a number [#1092](https://github.com/redpanda-data/console/pull/1092).
-- [FIX] Pushdown filters no longer failed to match when plain strings in key or value were used [#1093](https://github.com/redpanda-data/console/pull/1093).
+- [BUGFIX] Persist pagination settings in local storage [#1095](https://github.com/redpanda-data/console/pull/1095).
+- [BUGFIX] Re-add search bar to filter connectors by their name [#1094](https://github.com/redpanda-data/console/pull/1094).
+- [BUGFIX] Only update the custom offset in the message search if it's a number [#1092](https://github.com/redpanda-data/console/pull/1092).
+- [BUGFIX] Pushdown filters no longer failed to match when plain strings in key or value were used [#1093](https://github.com/redpanda-data/console/pull/1093).
 - [IMPROVEMENT] Cache custom offset input in message search [#1092](https://github.com/redpanda-data/console/pull/1092).
 
 ## v2.4.2 / 2024-02-06
 
-- [FIX] Fix pagination issue in frontend.
-- [FIX] Fix regex filtering issue in ACL screen in frontend [#1080](https://github.com/redpanda-data/console/issues/1080).
-- [FIX] Fix inconsistent filtering issue with list messages API when using pushdown filters [#1073](https://github.com/redpanda-data/console/issues/1073).
+- [BUGFIX] Fix pagination issue in frontend.
+- [BUGFIX] Fix regex filtering issue in ACL screen in frontend [#1080](https://github.com/redpanda-data/console/issues/1080).
+- [BUGFIX] Fix inconsistent filtering issue with list messages API when using pushdown filters [#1073](https://github.com/redpanda-data/console/issues/1073).
 - [IMPROVEMENT] Optimize schema registry protobuf refresh to reduce memory usage [#1040](https://github.com/redpanda-data/console/pull/1040).
 
 ## v2.4.1 / 2024-02-02
 
-- [FIX] Fix bug in schema registry URL paths for subject names that used escaping characters (i.e. %2F)
-- [FIX] The pagination component to select different pages always shows up now [#1034](https://github.com/redpanda-data/console/issues/1032)
-- [FIX] When sorting the Kafka topics by size the order was off, the column ordering is fixed now
-- [FIX] Using the "copy value" action for a Kafka record no longer includes the payload property multiple times [#1054](https://github.com/redpanda-data/console/issues/1054)
-- [FIX] Selecting the "size" column as the only column to show in the table settings used to throw an exception [#1051](https://github.com/redpanda-data/console/issues/1051)
-- [FIX] Fix decoding for msgpack encoded payloads [#1034](https://github.com/redpanda-data/console/issues/1034)
-- [FIX] Under certain circumstances the download messages button downloaded an empty JSON array instead of the shown records [#1031](https://github.com/redpanda-data/console/issues/1031)
-- [FIX] Searching for topics in the topicslist' quicksearch box using a regex did no longer work [#1026](https://github.com/redpanda-data/console/issues/1026)
+- [BUGFIX] Fix bug in schema registry URL paths for subject names that used escaping characters (i.e. %2F)
+- [BUGFIX] The pagination component to select different pages always shows up now [#1034](https://github.com/redpanda-data/console/issues/1032)
+- [BUGFIX] When sorting the Kafka topics by size the order was off, the column ordering is fixed now
+- [BUGFIX] Using the "copy value" action for a Kafka record no longer includes the payload property multiple times [#1054](https://github.com/redpanda-data/console/issues/1054)
+- [BUGFIX] Selecting the "size" column as the only column to show in the table settings used to throw an exception [#1051](https://github.com/redpanda-data/console/issues/1051)
+- [BUGFIX] Fix decoding for msgpack encoded payloads [#1034](https://github.com/redpanda-data/console/issues/1034)
+- [BUGFIX] Under certain circumstances the download messages button downloaded an empty JSON array instead of the shown records [#1031](https://github.com/redpanda-data/console/issues/1031)
+- [BUGFIX] Searching for topics in the topicslist' quicksearch box using a regex did no longer work [#1026](https://github.com/redpanda-data/console/issues/1026)
 - [IMPROVEMENT] Document new `console.maxDeserializationPayloadSize` config to control max message size that is still shown in the frontend
 
 ## v2.3.10 / 2024-01-29
 
-- [FIX] Fix bug in schema registry URL paths.
+- [BUGFIX] Fix bug in schema registry URL paths.
 - [CHANGE] Add better error logging for websocket upgrade.
 
 ## v2.4.0 / 2024-01-23
@@ -60,11 +184,11 @@
 
 ## v2.3.5 / 2023-10-16
 
-- [FIX] Add commonly pre-registered protobuf types to support automatic deserialization.
+- [BUGFIX] Add commonly pre-registered protobuf types to support automatic deserialization.
 
 ## v2.3.4 / 2023-10-10
 
-- [FIX] Build with latest Alpine image to address CVE-2023-38039.
+- [BUGFIX] Build with latest Alpine image to address CVE-2023-38039.
 
 ## v2.3.3 / 2023-09-14
 

@@ -13,9 +13,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/cloudhut/common/rest"
-	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"go.uber.org/zap"
 )
@@ -52,7 +52,13 @@ type BrokerConfigSynonym struct {
 
 // GetAllBrokerConfigs retrieves broker configs.
 func (s *Service) GetAllBrokerConfigs(ctx context.Context) (map[int32]BrokerConfig, error) {
-	metadata, err := s.kafkaSvc.GetMetadataTopics(ctx, nil)
+	cl, _, err := s.kafkaClientFactory.GetKafkaClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	req := kmsg.NewMetadataRequest()
+	metadata, err := req.RequestWith(ctx, cl)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get broker ids: %w", err)
 	}
@@ -87,7 +93,24 @@ func (s *Service) GetAllBrokerConfigs(ctx context.Context) (map[int32]BrokerConf
 
 // GetBrokerConfig retrieves a specifc broker's configurations.
 func (s *Service) GetBrokerConfig(ctx context.Context, brokerID int32) ([]BrokerConfigEntry, *rest.Error) {
-	res, err := s.kafkaSvc.DescribeBrokerConfig(ctx, brokerID, nil)
+	cl, _, err := s.kafkaClientFactory.GetKafkaClient(ctx)
+	if err != nil {
+		return nil, errorToRestError(err)
+	}
+
+	resourceReq := kmsg.NewDescribeConfigsRequestResource()
+	resourceReq.ResourceType = kmsg.ConfigResourceTypeBroker
+	resourceReq.ResourceName = strconv.Itoa(int(brokerID)) // Empty string for all brokers (only works for dynamic broker configs)
+	resourceReq.ConfigNames = nil                          // Nil requests all
+
+	req := kmsg.NewDescribeConfigsRequest()
+	req.Resources = []kmsg.DescribeConfigsRequestResource{
+		resourceReq,
+	}
+	req.IncludeSynonyms = true
+	req.IncludeDocumentation = true
+
+	res, err := req.RequestWith(ctx, cl)
 	if err != nil {
 		return nil, &rest.Error{
 			Err:      fmt.Errorf("failed to request broker config: %w", err),
@@ -99,7 +122,7 @@ func (s *Service) GetBrokerConfig(ctx context.Context, brokerID int32) ([]Broker
 
 	// Resources should always be of length = 1
 	for _, resource := range res.Resources {
-		err := kerr.TypedErrorForCode(resource.ErrorCode)
+		err := newKafkaErrorWithDynamicMessage(resource.ErrorCode, resource.ErrorMessage)
 		if err != nil {
 			return nil, &rest.Error{
 				Err:      err,

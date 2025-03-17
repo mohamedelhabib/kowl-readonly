@@ -7,36 +7,31 @@ import "google/api/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/empty.proto";
 import "protoc-gen-openapiv2/options/annotations.proto";
+import "redpanda/api/auth/v1/authorization.proto";
 
-// The following states are possible for a connector or one of its tasks
-// implement the state interface described in the Kafka connect API @see
-// https://docs.confluent.io/platform/current/connect/monitoring.html#connector-and-task-status
-// this includes holistic unified connector status that takes into account not
-// just the connector instance state, but also state of all the tasks within the
-// connector
+// State of a connector or one of its tasks, as described in the [Kafka Connect documentation](https://kafka.apache.org/documentation.html#connect_administration). Takes into account not just the state of the connector instance itself, but also the tasks within the connector.
 enum ConnectorHolisticState {
   CONNECTOR_HOLISTIC_STATE_UNSPECIFIED = 0;
-  // PAUSED: The connector/task has been administratively paused.
+  // The connector or task has been administratively paused.
   CONNECTOR_HOLISTIC_STATE_PAUSED = 1;
-  // RESTARTING: he connector/task is restarting.
+  // The connector or task is restarting.
   CONNECTOR_HOLISTIC_STATE_RESTARTING = 2;
-  // DESTROYED: Connector is in destroyed state, regardless of any tasks.
+  // The connector is destroyed, regardless of any tasks.
   CONNECTOR_HOLISTIC_STATE_DESTROYED = 3;
-  // STOPPED: The connector/task has been stopped.
+  // The connector or task has been stopped.
   CONNECTOR_HOLISTIC_STATE_STOPPED = 4;
-  // The connector/task has not yet been assigned to a worker
-  // UNASSIGNED: Connector is in unassigned state.
-  //    Or Connector is in running state, and there are unassigned tasks.
+  // - The connector or task has not yet been assigned to a worker,
+  // - THe connector is running, but there are unassigned tasks.
   CONNECTOR_HOLISTIC_STATE_UNASSIGNED = 5;
-  // HEALTHY: Connector is in running state, > 0 tasks, all of them in running state.
+  // The connector is running, > 0 tasks, all of them in running state.
   CONNECTOR_HOLISTIC_STATE_HEALTHY = 6;
-  // UNHEALTHY: Connector is failed state.
-  //			Or Connector is in running state but has 0 tasks.
-  // 			Or Connector is in running state, has > 0 tasks, and all tasks are in failed state.
+  // - The connector has failed,
+  // - The connector is running, but has no tasks,
+  // - Connector is running and has tasks, but all tasks have failed.
   CONNECTOR_HOLISTIC_STATE_UNHEALTHY = 7;
-  // DEGRADED: Connector is in running state, has > 0 tasks, but has at least one state in failed state, but not all tasks are failed.
+  // The connector is running and has tasks, and at least one task, but not all, have failed.
   CONNECTOR_HOLISTIC_STATE_DEGRADED = 8;
-  // UNKNOWN: The connector/task could no be determined
+  // The connector or task state could not be determined.
   CONNECTOR_HOLISTIC_STATE_UNKNOWN = 9;
 }
 
@@ -48,11 +43,16 @@ message ConnectorPlugin {
 
 message ConnectCluster {
   message Info {
+    // Connect worker version.
     string version = 1;
+    // The git commit ID of the connect worker source code.
     string commit = 2;
+    // Cluster ID.
     string kafka_cluster_id = 3;
   }
+  // Unique name of connect cluster. For Redpanda Cloud, the value is `redpanda`.
   string name = 1;
+  // The host address of the Kafka Connect cluster.
   string address = 2;
   Info info = 3;
   repeated ConnectorPlugin plugins = 4;
@@ -60,55 +60,69 @@ message ConnectCluster {
 
 message ConnectorStatus {
   message Connector {
+    // State of the connector instance.
     string state = 1;
+    // ID of worker that the connector is assigned to.
     string worker_id = 2;
+    // String value of stack trace.
     string trace = 3;
   }
+  // Name of connector.
   string name = 1;
   Connector connector = 2;
+  // Status of connector tasks. For more information, see the [https://docs.redpanda.com/current/deploy/deployment-option/cloud/managed-connectors/monitor-connectors/#connector-tasks](Monitor Connectors) documentation.
   repeated TaskStatus tasks = 3;
+  // Type of connector (sink or source).
   string type = 4;
-  // holistic_state of all the tasks within the connector this is our internal
-  // holistic state concept
+  // State of the connector including all the tasks within the connector.
   ConnectorHolisticState holistic_state = 5;
-  // Errors is list of parsed connectors' and tasks' errors
+  // List of parsed connectors' and tasks' errors.
   repeated ConnectorError errors = 6;
 }
 
 message TaskStatus {
+  // The connector task ID.
   int32 id = 1;
+  // State of connector task.
   string state = 2;
+  // ID of worker that the task is assigned to.
   string worker_id = 3;
+  // String value of stack trace.
   string trace = 4;
 }
 
 message TaskInfo {
+  // Name of connector.
   string connector = 1;
+  // The connector task ID.
   int32 task = 2;
 }
 
 // ConnectorError is the error of a connector, this is holistic error
 // abstraction, made parsing the error trace of connector or Task
 message ConnectorError {
+  // Error level.
   enum Type {
     TYPE_UNSPECIFIED = 0;
     TYPE_ERROR = 1;
     TYPE_WARNING = 2;
   }
   Type type = 1;
+  // Short description of the error.
   string title = 2;
+  // Detailed description of the error.
   string content = 3;
 }
 
-// ConectorInfo is the spec of the connector, as defined in the Kafka connect
-// API, it can be used as input of the connector creation or output of the
-// connectors
+// Connector specifications as defined in the Kafka Connect
+// API. You may include this in the request body when creating a new connector.
 message ConnectorSpec {
+  // Name of connector.
   string name = 1 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).required = true
   ];
-
+  // Connector configuration properties.
   map<string, string> config = 2 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).required = true
@@ -123,20 +137,33 @@ message ListConnectorsRequest {
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$",
+    (buf.validate.field).string.pattern = "^[a-zA-Z0-9-_]+$",
     (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
-      description: "Unique name of target connect cluster. For Redpanda self-hosted deployments, use the cluster name defined in the console's configuration file. For Redpanda Cloud, use `redpanda`.",
-      example: "\"redpanda\"",
+      description: "Unique name of target connect cluster. For Redpanda Cloud, use `redpanda`."
+      example: "\"redpanda\""
       field_configuration: {path_param_name: "cluster_name"}
     }
   ];
   // Value of the next_page_token field returned by the previous response. If not provided, the system assumes the first page is requested.
   string page_token = 2;
+  int32 page_size = 3 [
+    (buf.validate.field).int32 = {
+      gte: -1
+      lte: 1000
+    },
+    (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
+      description: "Limit the paginated response to a number of items. Defaults to 100. Use -1 to disable pagination."
+      minimum: -1
+      maximum: 1000
+    }
+  ];
 }
 
 message RestartConnectorRequest {
   message Options {
+    // Restart connector's tasks.
     bool include_tasks = 1;
+    // Restart only connectors that have failed.
     bool only_failed = 2;
   }
   string cluster_name = 1 [
@@ -144,20 +171,21 @@ message RestartConnectorRequest {
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$",
+    (buf.validate.field).string.pattern = "^[a-zA-Z0-9-_]+$",
     (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
-      description: "Unique name of target connect cluster. For Redpanda self-hosted deployments, use the cluster name defined in the console's configuration file. For Redpanda Cloud, use `redpanda`.",
-      example: "\"redpanda\"",
+      description: "Unique name of target connect cluster. For Redpanda Cloud, use `redpanda`."
+      example: "\"redpanda\""
       field_configuration: {path_param_name: "cluster_name"}
     }
   ];
 
+  // Name of connector.
   string name = 2 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$"
+    (buf.validate.field).string.max_len = 1024,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9!@#$%^&*()-_=+;:'\"`~,<.>/?|\\-]+$"
   ];
 
   Options options = 3;
@@ -169,20 +197,20 @@ message DeleteConnectorRequest {
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$",
+    (buf.validate.field).string.pattern = "^[a-zA-Z0-9-_]+$",
     (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
-      description: "Unique name of target connect cluster. For Redpanda self-hosted deployments, use the cluster name defined in the console's configuration file. For Redpanda Cloud, use `redpanda`.",
-      example: "\"redpanda\"",
+      description: "Unique name of target connect cluster. For Redpanda Cloud, use `redpanda`."
+      example: "\"redpanda\""
       field_configuration: {path_param_name: "cluster_name"}
     }
   ];
-
+  // Name of connector.
   string name = 2 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$"
+    (buf.validate.field).string.max_len = 1024,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9!@#$%^&*()-_=+;:'\"`~,<.>/?|\\-]+$"
   ];
 }
 
@@ -192,20 +220,21 @@ message PauseConnectorRequest {
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$",
+    (buf.validate.field).string.pattern = "^[a-zA-Z0-9-_]+$",
     (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
-      description: "Unique name of target connect cluster. For Redpanda self-hosted deployments, use the cluster name defined in the console's configuration file. For Redpanda Cloud, use `redpanda`.",
-      example: "\"redpanda\"",
+      description: "Unique name of target connect cluster. For Redpanda Cloud, use `redpanda`."
+      example: "\"redpanda\""
       field_configuration: {path_param_name: "cluster_name"}
     }
   ];
 
+  // Name of connector.
   string name = 2 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$"
+    (buf.validate.field).string.max_len = 1024,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9!@#$%^&*()-_=+;:'\"`~,<.>/?|\\-]+$"
   ];
 }
 
@@ -215,20 +244,21 @@ message ResumeConnectorRequest {
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$",
+    (buf.validate.field).string.pattern = "^[a-zA-Z0-9-_]+$",
     (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
-      description: "Unique name of target connect cluster. For Redpanda self-hosted deployments, use the cluster name defined in the console's configuration file. For Redpanda Cloud, use `redpanda`.",
-      example: "\"redpanda\"",
+      description: "Unique name of target connect cluster. For Redpanda Cloud, use `redpanda`."
+      example: "\"redpanda\""
       field_configuration: {path_param_name: "cluster_name"}
     }
   ];
 
+  // Name of connector.
   string name = 2 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$"
+    (buf.validate.field).string.max_len = 1024,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9!@#$%^&*()-_=+;:'\"`~,<.>/?|\\-]+$"
   ];
 }
 
@@ -238,20 +268,21 @@ message StopConnectorRequest {
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$",
+    (buf.validate.field).string.pattern = "^[a-zA-Z0-9-_]+$",
     (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
-      description: "Unique name of target connect cluster. For Redpanda self-hosted deployments, use the cluster name defined in the console's configuration file. For Redpanda Cloud, use `redpanda`.",
-      example: "\"redpanda\"",
+      description: "Unique name of target connect cluster. For Redpanda Cloud, use `redpanda`."
+      example: "\"redpanda\""
       field_configuration: {path_param_name: "cluster_name"}
     }
   ];
 
+  // Name of connector.
   string name = 2 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$"
+    (buf.validate.field).string.max_len = 1024,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9!@#$%^&*()-_=+;:'\"`~,<.>/?|\\-]+$"
   ];
 }
 
@@ -261,20 +292,20 @@ message GetConnectorRequest {
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$",
+    (buf.validate.field).string.pattern = "^[a-zA-Z0-9-_]+$",
     (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
-      description: "Unique name of target connect cluster. For Redpanda self-hosted deployments, use the cluster name defined in the console's configuration file. For Redpanda Cloud, use `redpanda`.",
-      example: "\"redpanda\"",
+      description: "Unique name of target connect cluster. For Redpanda Cloud, use `redpanda`."
+      example: "\"redpanda\""
       field_configuration: {path_param_name: "cluster_name"}
     }
   ];
-
+  // Name of connector.
   string name = 2 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$"
+    (buf.validate.field).string.max_len = 1024,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9!@#$%^&*()-_=+;:'\"`~,<.>/?|\\-]+$"
   ];
 }
 
@@ -284,10 +315,10 @@ message CreateConnectorRequest {
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$",
+    (buf.validate.field).string.pattern = "^[a-zA-Z0-9-_]+$",
     (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
-      description: "Unique name of target connect cluster. For Redpanda self-hosted deployments, use the cluster name defined in the console's configuration file. For Redpanda Cloud, use `redpanda`.",
-      example: "\"redpanda\"",
+      description: "Unique name of target connect cluster. For Redpanda Cloud, use `redpanda`."
+      example: "\"redpanda\""
       field_configuration: {path_param_name: "cluster_name"}
     }
   ];
@@ -304,13 +335,13 @@ message CreateConnectorResponse {
 
 message ListConnectorsResponse {
   message ConnectorInfoStatus {
-    // name is the connector name
+    // Name of connector.
     string name = 1;
     ConnectorSpec info = 2;
     ConnectorStatus status = 3;
   }
 
-  // connectors is the list of connectors the key is the connector name
+  // List of connectors, where the parent key is the connector name.
   repeated ConnectorInfoStatus connectors = 1;
   string next_page_token = 2 [(grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {description: "Page Token to fetch the next page. The value can be used as page_token in the next call to this endpoint."}];
 }
@@ -321,10 +352,10 @@ message GetConnectClusterRequest {
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$",
+    (buf.validate.field).string.pattern = "^[a-zA-Z0-9-_]+$",
     (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
-      description: "Unique name of target connect cluster. For Redpanda self-hosted deployments, use the cluster name defined in the console's configuration file. For Redpanda Cloud, use `redpanda`.",
-      example: "\"redpanda\"",
+      description: "Unique name of target connect cluster. For Redpanda Cloud, use `redpanda`."
+      example: "\"redpanda\""
       field_configuration: {path_param_name: "cluster_name"}
     }
   ];
@@ -346,22 +377,24 @@ message UpsertConnectorRequest {
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$",
+    (buf.validate.field).string.pattern = "^[a-zA-Z0-9-_]+$",
     (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
-      description: "Unique name of target connect cluster. For Redpanda self-hosted deployments, use the cluster name defined in the console's configuration file. For Redpanda Cloud, use `redpanda`.",
-      example: "\"redpanda\"",
+      description: "Unique name of target connect cluster. For Redpanda Cloud, use `redpanda`."
+      example: "\"redpanda\""
       field_configuration: {path_param_name: "cluster_name"}
     }
   ];
 
+  // Name of connector. If a connector with this name does not already exist, a new connector is created.
   string name = 2 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$"
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9!@#$%^&*()-_=+;:'\"`~,<.>/?|\\-]+$"
   ];
 
+  // Connector configuration property.
   map<string, string> config = 3 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).required = true
@@ -378,20 +411,21 @@ message GetConnectorConfigRequest {
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$",
+    (buf.validate.field).string.pattern = "^[a-zA-Z0-9-_]+$",
     (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
-      description: "Unique name of target connect cluster. For Redpanda self-hosted deployments, use the cluster name defined in the console's configuration file. For Redpanda Cloud, use `redpanda`.",
-      example: "\"redpanda\"",
+      description: "Unique name of target connect cluster. For Redpanda Cloud, use `redpanda`."
+      example: "\"redpanda\""
       field_configuration: {path_param_name: "cluster_name"}
     }
   ];
 
+  // Name of connector.
   string name = 2 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$"
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9!@#$%^&*()-_=+;:'\"`~,<.>/?|\\-]+$"
   ];
 }
 
@@ -405,20 +439,21 @@ message GetConnectorStatusRequest {
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$",
+    (buf.validate.field).string.pattern = "^[a-zA-Z0-9-_]+$",
     (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
-      description: "Unique name of target connect cluster. For Redpanda self-hosted deployments, use the cluster name defined in the console's configuration file. For Redpanda Cloud, use `redpanda`.",
-      example: "\"redpanda\"",
+      description: "Unique name of target connect cluster. For Redpanda Cloud, use `redpanda`."
+      example: "\"redpanda\""
       field_configuration: {path_param_name: "cluster_name"}
     }
   ];
 
+  // Name of connector.
   string name = 2 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$"
+    (buf.validate.field).string.max_len = 1024,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9!@#$%^&*()-_=+;:'\"`~,<.>/?|\\-]+$"
   ];
 }
 
@@ -432,24 +467,26 @@ message ListConnectorTopicsRequest {
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$",
+    (buf.validate.field).string.pattern = "^[a-zA-Z0-9-_]+$",
     (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
-      description: "Unique name of target connect cluster. For Redpanda self-hosted deployments, use the cluster name defined in the console's configuration file. For Redpanda Cloud, use `redpanda`.",
-      example: "\"redpanda\"",
+      description: "Unique name of target connect cluster. For Redpanda Cloud, use `redpanda`."
+      example: "\"redpanda\""
       field_configuration: {path_param_name: "cluster_name"}
     }
   ];
 
+  // Name of connector.
   string name = 2 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$"
+    (buf.validate.field).string.max_len = 1024,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9!@#$%^&*()-_=+;:'\"`~,<.>/?|\\-]+$"
   ];
 }
 
 message ListConnectorTopicsResponse {
+  // Topic names.
   repeated string topics = 1 [(google.api.field_behavior) = UNORDERED_LIST];
 }
 
@@ -459,20 +496,21 @@ message ResetConnectorTopicsRequest {
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$",
+    (buf.validate.field).string.pattern = "^[a-zA-Z0-9-_]+$",
     (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
-      description: "Unique name of target connect cluster. For Redpanda self-hosted deployments, use the cluster name defined in the console's configuration file. For Redpanda Cloud, use `redpanda`.",
-      example: "\"redpanda\"",
+      description: "Unique name of target connect cluster. For Redpanda Cloud, use `redpanda`."
+      example: "\"redpanda\""
       field_configuration: {path_param_name: "cluster_name"}
     }
   ];
 
+  // Name of connector using the topics to be reset.
   string name = 2 [
     (google.api.field_behavior) = REQUIRED,
     (buf.validate.field).required = true,
     (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).string.max_len = 128,
-    (buf.validate.field).string.pattern = "^[a-z0-9-_]+$"
+    (buf.validate.field).string.max_len = 1024,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9!@#$%^&*()-_=+;:'\"`~,<.>/?|\\-]+$"
   ];
 }
 
@@ -482,9 +520,14 @@ message ResetConnectorTopicsRequest {
 // proxied but also enriched with better error handling and custom
 // documentation and configuration
 service KafkaConnectService {
+  option deprecated = true;
+
+  option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_tag) = {description: "Manage [connectors](https://docs.redpanda.com/current/deploy/deployment-option/cloud/managed-connectors/) and interact with the Kafka Connect API."};
+
   // ListConnectClusters implements the list clusters method, list connect
   // clusters available in the console configuration
   rpc ListConnectClusters(ListConnectClustersRequest) returns (ListConnectClustersResponse) {
+    option deprecated = true;
     option (google.api.http) = {get: "/v1alpha1/connect/clusters"};
     option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
       summary: "List connect clusters"
@@ -499,18 +542,23 @@ service KafkaConnectService {
         }
       }
     };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_VIEW
+      api: API_KAFKA_CONNECT
+    };
   }
 
   // GetConnectCluster implements the get cluster info method, exposes a Kafka
   // Connect equivalent REST endpoint
   rpc GetConnectCluster(GetConnectClusterRequest) returns (GetConnectClusterResponse) {
+    option deprecated = true;
     option (google.api.http) = {
       get: "/v1alpha1/connect/clusters/{cluster_name}"
       response_body: "cluster"
     };
     option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
       summary: "Get connect cluster"
-      description: "Get information about an available Kafka Connect cluster. For Redpanda self-hosted deployments, use the cluster name defined in the console's configuration file. For Redpanda Cloud, use `redpanda`."
+      description: "Get information about an available Kafka Connect cluster."
       responses: {
         key: "200"
         value: {
@@ -530,11 +578,16 @@ service KafkaConnectService {
         }
       }
     };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_VIEW
+      api: API_KAFKA_CONNECT
+    };
   }
 
   // ListConnectors implements the list connectors method, exposes a Kafka
   // Connect equivalent REST endpoint
   rpc ListConnectors(ListConnectorsRequest) returns (ListConnectorsResponse) {
+    option deprecated = true;
     option (google.api.http) = {get: "/v1alpha1/connect/clusters/{cluster_name}/connectors"};
     option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
       summary: "List connectors"
@@ -549,11 +602,16 @@ service KafkaConnectService {
         }
       }
     };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_VIEW
+      api: API_KAFKA_CONNECT
+    };
   }
 
   // CreateConnector implements the create connector method, and exposes an
   // equivalent REST endpoint as the Kafka connect API endpoint
   rpc CreateConnector(CreateConnectorRequest) returns (CreateConnectorResponse) {
+    option deprecated = true;
     option (google.api.http) = {
       post: "/v1alpha1/connect/clusters/{cluster_name}/connectors"
       body: "connector"
@@ -572,18 +630,23 @@ service KafkaConnectService {
         }
       }
     };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_EDIT
+      api: API_KAFKA_CONNECT
+    };
   }
 
   // RestartConnector implements the restart connector method, exposes a Kafka
   // Connect equivalent REST endpoint
   rpc RestartConnector(RestartConnectorRequest) returns (google.protobuf.Empty) {
+    option deprecated = true;
     option (google.api.http) = {
       post: "/v1alpha1/connect/clusters/{cluster_name}/connectors/{name}/restart"
       body: "options"
     };
     option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
       summary: "Restart connector"
-      description: "Restarts a connector, triggers a connector restart, you can specify the only_failed or/and the include_tasks options."
+      description: "Triggers a connector restart. You must specify whether or not tasks are also restarted, and whether only failed connectors are restarted."
       responses: {
         key: "204"
         value: {
@@ -592,11 +655,16 @@ service KafkaConnectService {
         }
       }
     };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_EDIT
+      api: API_KAFKA_CONNECT
+    };
   }
 
   // GetConnector implements the get connector method, exposes a Kafka
   // Connect equivalent REST endpoint
   rpc GetConnector(GetConnectorRequest) returns (GetConnectorResponse) {
+    option deprecated = true;
     option (google.api.http) = {
       get: "/v1alpha1/connect/clusters/{cluster_name}/connectors/{name}"
       response_body: "connector"
@@ -614,6 +682,10 @@ service KafkaConnectService {
         }
       }
     };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_VIEW
+      api: API_KAFKA_CONNECT
+    };
   }
 
   // GetConnectorStatus implement the get status method, Gets the current status of the connector, including:
@@ -622,6 +694,7 @@ service KafkaConnectService {
   // Error information if it has failed
   // The state of all its tasks
   rpc GetConnectorStatus(GetConnectorStatusRequest) returns (GetConnectorStatusResponse) {
+    option deprecated = true;
     option (google.api.http) = {
       get: "/v1alpha1/connect/clusters/{cluster_name}/connectors/{name}/status"
       response_body: "status"
@@ -639,11 +712,16 @@ service KafkaConnectService {
         }
       }
     };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_VIEW
+      api: API_KAFKA_CONNECT
+    };
   }
 
   // PauseConnector implements the pause connector method, exposes a Kafka
   // connect equivalent REST endpoint
   rpc PauseConnector(PauseConnectorRequest) returns (google.protobuf.Empty) {
+    option deprecated = true;
     option (google.api.http) = {put: "/v1alpha1/connect/clusters/{cluster_name}/connectors/{name}/pause"};
     option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
       summary: "Pause connector"
@@ -656,11 +734,16 @@ service KafkaConnectService {
         }
       }
     };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_EDIT
+      api: API_KAFKA_CONNECT
+    };
   }
 
   // ResumeConnector implements the resume connector method, exposes a Kafka
   // connect equivalent REST endpoint
   rpc ResumeConnector(ResumeConnectorRequest) returns (google.protobuf.Empty) {
+    option deprecated = true;
     option (google.api.http) = {put: "/v1alpha1/connect/clusters/{cluster_name}/connectors/{name}/resume"};
     option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
       summary: "Resume connector"
@@ -673,16 +756,21 @@ service KafkaConnectService {
         }
       }
     };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_EDIT
+      api: API_KAFKA_CONNECT
+    };
   }
 
   // StopConnector implements the stop connector method, exposes a Kafka
   // connect equivalent REST endpoint it stops the connector but does not
   // delete the connector. All tasks for the connector are shut down completely
   rpc StopConnector(StopConnectorRequest) returns (google.protobuf.Empty) {
+    option deprecated = true;
     option (google.api.http) = {put: "/v1alpha1/connect/clusters/{cluster_name}/connectors/{name}/stop"};
     option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
       summary: "Stop connector"
-      description: "Stops a connector, but does not delete the connector. All tasks for the connector are shut down completely. This call is asynchronous and may take some time to process."
+      description: "Stops a connector, but does not delete it. All tasks for the connector are shut down completely. This call is asynchronous and may take some time to process."
       responses: {
         key: "202"
         value: {
@@ -690,6 +778,10 @@ service KafkaConnectService {
           schema: {}
         }
       }
+    };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_EDIT
+      api: API_KAFKA_CONNECT
     };
   }
 
@@ -708,11 +800,16 @@ service KafkaConnectService {
         }
       }
     };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_EDIT
+      api: API_KAFKA_CONNECT
+    };
   }
 
   // UpsertConector implements the update or create connector method, it
   // exposes a kafka connect equivalent REST endpoint
   rpc UpsertConnector(UpsertConnectorRequest) returns (UpsertConnectorResponse) {
+    option deprecated = true;
     option (google.api.http) = {
       put: "/v1alpha1/connect/clusters/{cluster_name}/connectors/{name}/config"
       body: "config"
@@ -720,7 +817,7 @@ service KafkaConnectService {
     };
     option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
       summary: "Upsert connector configuration"
-      description: "Create a new connector using the given configuration, or update the configuration for an existing connector. Returns information about the connector after the change has been made."
+      description: "Update the configuration for an existing connector with the specified name, or create a new connector using the given configuration. Returns information about the connector after the change has been made."
       responses: {
         key: "200"
         value: {
@@ -740,10 +837,15 @@ service KafkaConnectService {
         }
       }
     };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_EDIT
+      api: API_KAFKA_CONNECT
+    };
   }
 
   // GetConnectorConfig implements the get connector configuration method, expose a kafka connect equivalent REST endpoint
   rpc GetConnectorConfig(GetConnectorConfigRequest) returns (GetConnectorConfigResponse) {
+    option deprecated = true;
     option (google.api.http) = {
       get: "/v1alpha1/connect/clusters/{cluster_name}/connectors/{name}/config"
       response_body: "config"
@@ -752,10 +854,15 @@ service KafkaConnectService {
       summary: "Get connector configuration"
       description: "Get the configuration for the connector."
     };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_VIEW
+      api: API_KAFKA_CONNECT
+    };
   }
 
   // ListConnectorTopics implements the list connector topics method, expose a kafka connect equivalent REST endpoint
   rpc ListConnectorTopics(ListConnectorTopicsRequest) returns (ListConnectorTopicsResponse) {
+    option deprecated = true;
     option (google.api.http) = {get: "/v1alpha1/connect/clusters/{cluster_name}/connectors/{name}/topics"};
     option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
       summary: "List connector topics"
@@ -770,11 +877,16 @@ service KafkaConnectService {
         }
       }
     };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_VIEW
+      api: API_KAFKA_CONNECT
+    };
   }
 
   // ResetConnectorTopics implements the reset connector topics method, expose a kafka connect equivalent REST endpoint
   // the request body is empty.
   rpc ResetConnectorTopics(ResetConnectorTopicsRequest) returns (google.protobuf.Empty) {
+    option deprecated = true;
     option (google.api.http) = {put: "/v1alpha1/connect/clusters/{cluster_name}/connectors/{name}/topics/reset"};
     option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
       summary: "Reset connector topics"
@@ -786,6 +898,10 @@ service KafkaConnectService {
           schema: {}
         }
       }
+    };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_EDIT
+      api: API_KAFKA_CONNECT
     };
   }
 }

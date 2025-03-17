@@ -9,42 +9,51 @@
  * by the Apache License, Version 2.0
  */
 
-/* eslint-disable no-useless-escape */
 import { Box, Heading, Text } from '@redpanda-data/ui';
 import { observer } from 'mobx-react';
-import { PropertyGroup } from '../../../../state/connect/state';
-import { ConnectorStep } from '../../../../state/restInterfaces';
+import type { PropertyGroup } from '../../../../state/connect/state';
+import type { ConnectorStep } from '../../../../state/restInterfaces';
 import { PropertyGroupComponent } from './PropertyGroup';
+import type { ConfigPageProps } from './components';
 
-export const ConnectorStepComponent = observer((props: {
+export const ConnectorStepComponent = observer(
+  (props: {
     step: ConnectorStep;
     groups: PropertyGroup[];
     allGroups: PropertyGroup[];
     showAdvancedOptions: boolean;
     connectorType: 'sink' | 'source';
-}) => {
+    context: ConfigPageProps['context'];
+  }) => {
     const step = props.step;
     const groups = props.groups;
 
-    const totalVisibleProperties = groups.sum(x => x.filteredProperties.length);
-    if (totalVisibleProperties == 0)
-        return null;
+    const totalVisibleProperties = groups.sum((x) => x.filteredProperties.length);
+    if (totalVisibleProperties === 0) return null;
 
-    return <Box>
-        <Heading as="h3" size="md" mt="8" mb="4">{step.name}</Heading>
+    return (
+      <Box>
+        <Heading as="h3" size="md" mt="8" mb="4">
+          {step.name}
+        </Heading>
 
-        {step.description &&
-            <Text size="sm" mb="4">{step.description}</Text>}
-
-        {groups.map((g, i) =>
-            <PropertyGroupComponent
-                key={i}
-                group={g}
-                allGroups={props.allGroups}
-                showAdvancedOptions={props.showAdvancedOptions}
-                connectorType={props.connectorType}
-            />
+        {step.description && (
+          <Text size="sm" mb="4">
+            {step.description}
+          </Text>
         )}
-    </Box>
 
-});
+        {groups.map((g, i) => (
+          <PropertyGroupComponent
+            key={i}
+            group={g}
+            allGroups={props.allGroups}
+            showAdvancedOptions={props.showAdvancedOptions}
+            connectorType={props.connectorType}
+            context={props.context}
+          />
+        ))}
+      </Box>
+    );
+  },
+);

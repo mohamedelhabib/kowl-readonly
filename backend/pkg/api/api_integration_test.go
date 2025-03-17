@@ -28,7 +28,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/redpanda"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -63,7 +62,7 @@ func (s *APIIntegrationTestSuite) SetupSuite() {
 	require := require.New(t)
 
 	ctx := context.Background()
-	container, err := redpanda.RunContainer(ctx, testcontainers.WithImage("redpandadata/redpanda:v23.3.2"))
+	container, err := redpanda.Run(ctx, "redpandadata/redpanda:v23.3.18")
 	require.NoError(err)
 	s.redpandaContainer = container
 
@@ -93,25 +92,25 @@ func (s *APIIntegrationTestSuite) SetupSuite() {
 		},
 	}
 	s.cfg.Kafka.Brokers = []string{s.testSeedBroker}
-	s.cfg.Kafka.Protobuf.Enabled = true
-	s.cfg.Kafka.Protobuf.SchemaRegistry.Enabled = true
-	s.cfg.Kafka.Protobuf.SchemaRegistry.RefreshInterval = 2 * time.Second
-	s.cfg.Kafka.Schema.Enabled = true
-	s.cfg.Kafka.Schema.URLs = []string{registryAddr}
+	s.cfg.Serde.Protobuf.Enabled = true
+	s.cfg.SchemaRegistry.Enabled = true
+	s.cfg.SchemaRegistry.URLs = []string{registryAddr}
 
 	// proto message mapping
 	absProtoPath, err := filepath.Abs("../testutil/testdata/proto")
 	require.NoError(err)
-	s.cfg.Kafka.Protobuf.Enabled = true
-	s.cfg.Kafka.Protobuf.Mappings = []config.ProtoTopicMapping{
+	s.cfg.Serde.Protobuf.Enabled = true
+	topic0 := config.RegexpOrLiteral{}
+	topic0.UnmarshalText([]byte(testutil.TopicNameForTest("publish_messages_proto_plain")))
+	s.cfg.Serde.Protobuf.Mappings = []config.ProtoTopicMapping{
 		{
-			TopicName:      testutil.TopicNameForTest("publish_messages_proto_plain"),
+			TopicName:      topic0,
 			ValueProtoType: "testutil.things.v1.Item",
 		},
 	}
-	s.cfg.Kafka.Protobuf.FileSystem.Enabled = true
-	s.cfg.Kafka.Protobuf.FileSystem.RefreshInterval = 1 * time.Minute
-	s.cfg.Kafka.Protobuf.FileSystem.Paths = []string{absProtoPath}
+	s.cfg.Serde.Protobuf.FileSystem.Enabled = true
+	s.cfg.Serde.Protobuf.FileSystem.RefreshInterval = 1 * time.Minute
+	s.cfg.Serde.Protobuf.FileSystem.Paths = []string{absProtoPath}
 
 	s.api = New(s.cfg)
 

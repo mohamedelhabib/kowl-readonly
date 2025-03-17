@@ -16,8 +16,9 @@ import (
 	"connectrpc.com/connect"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/redpanda-data/console/backend/pkg/logging"
 )
 
 var _ connect.Interceptor = &ErrorLogInterceptor{}
@@ -27,20 +28,11 @@ var _ connect.Interceptor = &ErrorLogInterceptor{}
 // are written before the interceptors would be called, such as:
 // - Authentication errors (enterprise HTTP middleware)
 // - JSON Unmarshalling errors of request body (happens prior calling interceptors)
-type ErrorLogInterceptor struct {
-	logger *zap.Logger
-
-	// loggingFieldsHook is a func that can be used to get context about the
-	// authenticated user that issued the request.
-	loggingFieldsHook func(ctx context.Context) []zapcore.Field
-}
+type ErrorLogInterceptor struct{}
 
 // NewErrorLogInterceptor creates a new ErrorLogInterceptor.
-func NewErrorLogInterceptor(logger *zap.Logger, loggingFieldsHook func(ctx context.Context) []zapcore.Field) *ErrorLogInterceptor {
-	return &ErrorLogInterceptor{
-		logger:            logger,
-		loggingFieldsHook: loggingFieldsHook,
-	}
+func NewErrorLogInterceptor() *ErrorLogInterceptor {
+	return &ErrorLogInterceptor{}
 }
 
 // WrapUnary creates an interceptor to validate Connect requests.
@@ -82,18 +74,27 @@ func (in *ErrorLogInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFu
 		requestDuration := time.Since(start)
 		statusCodeStr := in.statusCode(protocol, err)
 
-		if err != nil {
-			in.logger.With(in.loggingFieldsHook(ctx)...).Warn("",
-				zap.String("timestamp", start.Format(time.RFC3339)),
-				zap.String("procedure", procedure),
-				zap.String("request_duration", requestDuration.String()),
-				zap.String("status_code", statusCodeStr),
-				zap.Int("request_size_bytes", requestSize),
-				zap.String("peer_address", req.Peer().Addr), // Will be empty for requests made through gRPC GW
-				zap.Error(err),
-			)
+		// 4. If no error there's nothing to log here
+		if err == nil {
+			return response, nil
 		}
 
+		// 5. Skip error response we aren't interested in
+		if connect.CodeOf(err) == connect.CodeUnimplemented {
+			return response, err
+		}
+
+		// 6. Log error details with decorated logger
+		logger := logging.FromContext(ctx)
+		logger.Warn("",
+			zap.String("timestamp", start.Format(time.RFC3339)),
+			zap.String("procedure", procedure),
+			zap.String("request_duration", requestDuration.String()),
+			zap.String("status_code", statusCodeStr),
+			zap.Int("request_size_bytes", requestSize),
+			zap.String("peer_address", req.Peer().Addr), // Will be empty for requests made through gRPC GW
+			zap.Error(err),
+		)
 		return response, err
 	}
 }
@@ -111,21 +112,18 @@ func (*ErrorLogInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFu
 }
 
 func (*ErrorLogInterceptor) statusCode(protocol string, serverErr error) string {
-	grpcProtocol := "grpc"
-	grpcwebProtocol := "grpc_web"
-	connectProtocol := "connect_rpc"
 	httpProtocol := "http"
 
 	// Following the respective specifications, use integers and "status_code" for
 	// gRPC codes in contrast to strings and "error_code" for Connect codes.
 	// TODO: Check protocol case for gRPC gateway
 	switch protocol {
-	case grpcProtocol, grpcwebProtocol, httpProtocol:
+	case connect.ProtocolGRPC, connect.ProtocolGRPCWeb, httpProtocol:
 		if serverErr != nil {
 			return connect.CodeOf(serverErr).String()
 		}
 		return "ok"
-	case connectProtocol:
+	case connect.ProtocolConnect:
 		if connect.IsNotModifiedError(serverErr) {
 			// A "not modified" error is special: it's code is technically "unknown" but
 			// it would be misleading to label it as an unknown error since it's not really

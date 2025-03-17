@@ -78,6 +78,20 @@ export enum Reason {
    * @generated from enum value: REASON_TIMEOUT = 9;
    */
   TIMEOUT = 9,
+
+  /**
+   * The feature is not configured.
+   *
+   * @generated from enum value: REASON_FEATURE_NOT_CONFIGURED = 10;
+   */
+  FEATURE_NOT_CONFIGURED = 10,
+
+  /**
+   * The feature is not supported in the requested environment.
+   *
+   * @generated from enum value: REASON_FEATURE_NOT_SUPPORTED = 11;
+   */
+  FEATURE_NOT_SUPPORTED = 11,
 }
 // Retrieve enum metadata with: proto3.getEnumType(Reason)
 proto3.util.setEnumType(Reason, "redpanda.api.common.v1alpha1.Reason", [
@@ -91,6 +105,8 @@ proto3.util.setEnumType(Reason, "redpanda.api.common.v1alpha1.Reason", [
   { no: 7, name: "REASON_SERVER_ERROR" },
   { no: 8, name: "REASON_TOO_MANY_REQUESTS" },
   { no: 9, name: "REASON_TIMEOUT" },
+  { no: 10, name: "REASON_FEATURE_NOT_CONFIGURED" },
+  { no: 11, name: "REASON_FEATURE_NOT_SUPPORTED" },
 ]);
 
 /**

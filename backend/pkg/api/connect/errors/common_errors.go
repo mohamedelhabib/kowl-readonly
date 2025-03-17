@@ -12,9 +12,8 @@ package errors
 import (
 	"errors"
 
+	commonv1alpha1 "buf.build/gen/go/redpandadata/common/protocolbuffers/go/redpanda/api/common/v1alpha1"
 	"connectrpc.com/connect"
-
-	v1alpha1 "github.com/redpanda-data/console/backend/pkg/protogen/redpanda/api/dataplane/v1alpha1"
 )
 
 // NewRedpandaAdminAPINotConfiguredError is a standard error to return if an endpoint
@@ -23,7 +22,45 @@ func NewRedpandaAdminAPINotConfiguredError() *connect.Error {
 	return NewConnectError(
 		connect.CodeUnimplemented,
 		errors.New("the redpanda admin api must be configured to use this endpoint"),
-		NewErrorInfo(v1alpha1.Reason_REASON_FEATURE_NOT_CONFIGURED.String()),
+		NewErrorInfo(commonv1alpha1.Reason_REASON_FEATURE_NOT_CONFIGURED.String()),
+		NewHelp(NewHelpLinkConsoleReferenceConfig()),
+	)
+}
+
+// NewSchemaRegistryNotConfiguredError is a standard error to return if an endpoint
+// requires the Schema Registry API to be configured, but it isn't.
+func NewSchemaRegistryNotConfiguredError() *connect.Error {
+	return NewConnectError(
+		connect.CodeUnimplemented,
+		errors.New("the schema registry api must be configured to use this endpoint"),
+		NewErrorInfo(commonv1alpha1.Reason_REASON_FEATURE_NOT_CONFIGURED.String()),
+		NewHelp(NewHelpLinkConsoleReferenceConfig()),
+	)
+}
+
+// NewKafkaConnectNotConfiguredError is a standard error to return if an endpoint
+// requires the Kafka Connect API to be configured, but it isn't.
+func NewKafkaConnectNotConfiguredError() *connect.Error {
+	return NewConnectError(
+		connect.CodeUnimplemented,
+		errors.New("the Kafka connect api must be configured to use this endpoint"),
+		NewErrorInfo(commonv1alpha1.Reason_REASON_FEATURE_NOT_CONFIGURED.String()),
+		NewHelp(NewHelpLinkConsoleReferenceConfig()),
+	)
+}
+
+// NewRedpandaFeatureNotSupportedError is a standard error to return if an endpoint
+// requires the Redpanda feature that is not supported with current running version and instance.
+func NewRedpandaFeatureNotSupportedError(feature string) *connect.Error {
+	return NewConnectError(
+		connect.CodeUnimplemented,
+		errors.New("redpanda version does not support feature: "+feature),
+		NewErrorInfo(commonv1alpha1.Reason_REASON_FEATURE_NOT_SUPPORTED.String(), []KeyVal{
+			{
+				Key:   "feature",
+				Value: feature,
+			},
+		}...),
 		NewHelp(NewHelpLinkConsoleReferenceConfig()),
 	)
 }

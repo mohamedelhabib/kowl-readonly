@@ -1,10 +1,8 @@
 version: v1
 deps:
-  - buf.build/envoyproxy/protoc-gen-validate:dfcdc5ea103dda467963fb7079e4df28debcfd28
-  - buf.build/grpc-ecosystem/grpc-gateway:a1ecdc58eccd49aa8bea2a7a9022dc27
+  - buf.build/grpc-ecosystem/grpc-gateway:v2.24.0
   - buf.build/googleapis/googleapis
   - buf.build/bufbuild/protovalidate
-  - buf.build/redpandadata/common
 name: buf.build/redpandadata/dataplane
 breaking:
   use:
@@ -13,8 +11,9 @@ breaking:
     - WIRE_JSON
   ignore:
     - redpanda/api/dataplane/v1alpha1
+    - redpanda/api/console/v1alpha1
 lint:
   use:
-    - DEFAULT
+    - STANDARD
   allow_comment_ignores: true
   rpc_allow_google_protobuf_empty_responses: true

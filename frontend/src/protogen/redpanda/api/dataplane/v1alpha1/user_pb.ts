@@ -7,6 +7,8 @@ import type { BinaryReadOptions, FieldList, JsonReadOptions, JsonValue, PartialM
 import { Message, proto3 } from "@bufbuild/protobuf";
 
 /**
+ * SASL mechanism to use for authentication.
+ *
  * @generated from enum redpanda.api.dataplane.v1alpha1.SASLMechanism
  */
 export enum SASLMechanism {
@@ -41,6 +43,19 @@ export class ListUsersRequest extends Message<ListUsersRequest> {
    */
   filter?: ListUsersRequest_Filter;
 
+  /**
+   * @generated from field: int32 page_size = 2;
+   */
+  pageSize = 0;
+
+  /**
+   * Value of the next_page_token field returned by the previous response.
+   * If not provided, the system assumes the first page is requested.
+   *
+   * @generated from field: string page_token = 3;
+   */
+  pageToken = "";
+
   constructor(data?: PartialMessage<ListUsersRequest>) {
     super();
     proto3.util.initPartial(data, this);
@@ -50,6 +65,8 @@ export class ListUsersRequest extends Message<ListUsersRequest> {
   static readonly typeName = "redpanda.api.dataplane.v1alpha1.ListUsersRequest";
   static readonly fields: FieldList = proto3.util.newFieldList(() => [
     { no: 1, name: "filter", kind: "message", T: ListUsersRequest_Filter },
+    { no: 2, name: "page_size", kind: "scalar", T: 5 /* ScalarType.INT32 */ },
+    { no: 3, name: "page_token", kind: "scalar", T: 9 /* ScalarType.STRING */ },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): ListUsersRequest {
@@ -74,11 +91,15 @@ export class ListUsersRequest extends Message<ListUsersRequest> {
  */
 export class ListUsersRequest_Filter extends Message<ListUsersRequest_Filter> {
   /**
+   * Username.
+   *
    * @generated from field: string name = 1;
    */
   name = "";
 
   /**
+   * Substring match on username. Case-sensitive.
+   *
    * @generated from field: string name_contains = 2;
    */
   nameContains = "";
@@ -121,6 +142,13 @@ export class ListUsersResponse extends Message<ListUsersResponse> {
    */
   users: ListUsersResponse_User[] = [];
 
+  /**
+   * Token to retrieve the next page.
+   *
+   * @generated from field: string next_page_token = 2;
+   */
+  nextPageToken = "";
+
   constructor(data?: PartialMessage<ListUsersResponse>) {
     super();
     proto3.util.initPartial(data, this);
@@ -130,6 +158,7 @@ export class ListUsersResponse extends Message<ListUsersResponse> {
   static readonly typeName = "redpanda.api.dataplane.v1alpha1.ListUsersResponse";
   static readonly fields: FieldList = proto3.util.newFieldList(() => [
     { no: 1, name: "users", kind: "message", T: ListUsersResponse_User, repeated: true },
+    { no: 2, name: "next_page_token", kind: "scalar", T: 9 /* ScalarType.STRING */ },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): ListUsersResponse {
@@ -154,6 +183,8 @@ export class ListUsersResponse extends Message<ListUsersResponse> {
  */
 export class ListUsersResponse_User extends Message<ListUsersResponse_User> {
   /**
+   * Username.
+   *
    * @generated from field: string name = 1;
    */
   name = "";
@@ -234,11 +265,15 @@ export class CreateUserRequest extends Message<CreateUserRequest> {
  */
 export class CreateUserRequest_User extends Message<CreateUserRequest_User> {
   /**
+   * Username.
+   *
    * @generated from field: string name = 1;
    */
   name = "";
 
   /**
+   * Password.
+   *
    * @generated from field: string password = 2;
    */
   password = "";
@@ -320,6 +355,8 @@ export class CreateUserResponse extends Message<CreateUserResponse> {
  */
 export class CreateUserResponse_User extends Message<CreateUserResponse_User> {
   /**
+   * Name of newly-created user
+   *
    * @generated from field: string name = 1;
    */
   name = "";
@@ -400,11 +437,15 @@ export class UpdateUserRequest extends Message<UpdateUserRequest> {
  */
 export class UpdateUserRequest_User extends Message<UpdateUserRequest_User> {
   /**
+   * Username.
+   *
    * @generated from field: string name = 1;
    */
   name = "";
 
   /**
+   * Password.
+   *
    * @generated from field: string password = 2;
    */
   password = "";
@@ -482,6 +523,8 @@ export class UpdateUserResponse extends Message<UpdateUserResponse> {
 }
 
 /**
+ * Updated user's name and SASL mechanism.
+ *
  * @generated from message redpanda.api.dataplane.v1alpha1.UpdateUserResponse.User
  */
 export class UpdateUserResponse_User extends Message<UpdateUserResponse_User> {
@@ -529,6 +572,8 @@ export class UpdateUserResponse_User extends Message<UpdateUserResponse_User> {
  */
 export class DeleteUserRequest extends Message<DeleteUserRequest> {
   /**
+   * Username
+   *
    * @generated from field: string name = 1;
    */
   name = "";

@@ -13,6 +13,8 @@ import (
 	"flag"
 	"fmt"
 	"net/url"
+
+	"github.com/redpanda-data/common-go/rpadmin"
 )
 
 // RedpandaAdminAPI has the required configurations to make a connection to the
@@ -21,12 +23,14 @@ type RedpandaAdminAPI struct {
 	Enabled bool     `yaml:"enabled"`
 	URLs    []string `yaml:"urls"`
 
-	// Basic Auth Credentials
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
+	Authentication HTTPAuthentication `yaml:"authentication"`
 
 	// TLS Config
-	TLS RedpandaAdminAPITLS `yaml:"tls"`
+	TLS TLS `yaml:"tls"`
+
+	// Startup contains relevant configurations such as connection max retries
+	// for the initial Redpanda service creation.
+	Startup ServiceStartupAttemptsOptions `yaml:"startup"`
 }
 
 // RegisterFlags for sensitive Admin API configurations.
@@ -37,6 +41,10 @@ func (c *RedpandaAdminAPI) RegisterFlags(flags *flag.FlagSet) {
 // SetDefaults for Admin API configuration.
 func (c *RedpandaAdminAPI) SetDefaults() {
 	c.Enabled = false
+
+	c.Startup.SetDefaults()
+
+	c.TLS.SetDefaults()
 }
 
 // Validate Admin API configuration.
@@ -72,5 +80,30 @@ func (c *RedpandaAdminAPI) Validate() error {
 		return fmt.Errorf("invalid TLS config: %w", err)
 	}
 
+	err := c.Startup.Validate()
+	if err != nil {
+		return fmt.Errorf("failed to validate startup config: %w", err)
+	}
+
 	return nil
+}
+
+// RPAdminAuth returns the auth option that is required when constructing a new rpadmin.Client.
+func (c *RedpandaAdminAPI) RPAdminAuth() rpadmin.Auth {
+	if !c.Enabled || c.Authentication.ImpersonateUser {
+		return &rpadmin.NopAuth{}
+	}
+
+	if c.Authentication.BasicAuth.Username != "" {
+		return &rpadmin.BasicAuth{
+			Username: c.Authentication.BasicAuth.Username,
+			Password: c.Authentication.BasicAuth.Password,
+		}
+	}
+
+	if c.Authentication.BearerToken != "" {
+		return &rpadmin.BearerToken{Token: c.Authentication.BearerToken}
+	}
+
+	return &rpadmin.NopAuth{}
 }

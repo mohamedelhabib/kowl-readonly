@@ -1,0 +1,45 @@
+serveFrontend: false
+
+kafka:
+  brokers: ["localhost:19092"]
+  sasl:
+    enabled: true
+    mechanism: SCRAM-SHA-256
+    username: e2euser
+    password: very-secret
+    impersonateUser: true
+
+authentication:
+  jwtSigningKey: vazxnT+ZHtxKslK6QlDGovcYnSjTk/lKMmZ+mHrBVE+YdVDkLgSuP6AszAKe9999
+  useSecureCookies: false
+  basic:
+    enabled: true
+
+redpanda:
+  adminApi:
+    enabled: true
+    urls: ["http://localhost:19644"]
+
+schemaRegistry:
+  enabled: true
+  urls: ["http://localhost:18081"]
+
+kafkaConnect:
+  enabled: true
+  clusters:
+    - name: local-connect-cluster
+      url: http://localhost:18083
+    - name: local-connect-cluster2
+      url: http://localhost:18083
+server:
+  listenPort: 9090
+  allowedOrigins: ["http://localhost:3000", "http://localhost:3001"]
+
+licenseFilepath: ../../frontend/tests/config/redpanda.license
+
+authorization:
+  roleBindings:
+    - roleName: admin
+      users:
+        - loginType: basic
+          name: e2euser
