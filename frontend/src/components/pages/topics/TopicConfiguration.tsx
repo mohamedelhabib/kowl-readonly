@@ -1,4 +1,3 @@
-import { PencilIcon } from '@heroicons/react/solid';
 import {
   Alert,
   AlertIcon,
@@ -19,25 +18,24 @@ import {
   RadioGroup,
   SearchField,
   Text,
-  Tooltip,
-  useToast,
+  useToast
 } from '@redpanda-data/ui';
 import { observer, useLocalObservable } from 'mobx-react';
 import type { FC } from 'react';
 import { useState } from 'react';
 import { Controller, type SubmitHandler, useForm } from 'react-hook-form';
+import { MdInfoOutline } from 'react-icons/md';
+import { isServerless } from '../../../config';
+import { api } from '../../../state/backendApi';
 import type { ConfigEntryExtended } from '../../../state/restInterfaces';
 import {
   entryHasInfiniteValue,
   formatConfigValue,
   getInfiniteValueForEntry,
 } from '../../../utils/formatters/ConfigValueFormatter';
+import { SingleSelect } from '../../misc/Select';
 import { DataSizeSelect, DurationSelect, NumInput, RatioInput } from './CreateTopicModal/CreateTopicModal';
 import './TopicConfiguration.scss';
-import { MdInfoOutline } from 'react-icons/md';
-import { isServerless } from '../../../config';
-import { api } from '../../../state/backendApi';
-import { SingleSelect } from '../../misc/Select';
 
 type ConfigurationEditorProps = {
   targetTopic: string; // topic name, or null if default configs
@@ -329,16 +327,6 @@ const ConfigEntryComponent = observer(
         <span className="isEditted">{entry.isExplicitlySet && 'Custom'}</span>
 
         <span className="configButtons">
-          <Tooltip label={nonEdittableReason} placement="left" isDisabled={canEdit} hasArrow>
-            <span
-              className={`btnEdit${canEdit ? '' : ' disabled'}`}
-              onClick={() => {
-                if (canEdit) p.onEditEntry(p.entry);
-              }}
-            >
-              <Icon as={PencilIcon} />
-            </span>
-          </Tooltip>
           {entry.documentation && (
             <Popover
               hideCloseButton

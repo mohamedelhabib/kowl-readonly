@@ -26,16 +26,14 @@ import {
   DataTable,
   Flex,
   Grid,
-  Icon,
   Popover,
   Text,
   Tooltip,
-  useToast,
+  useToast
 } from '@redpanda-data/ui';
 import { type IReactionDisposer, autorun, computed, makeObservable, observable } from 'mobx';
 import { observer } from 'mobx-react';
 import React, { type FC, useRef, useState } from 'react';
-import { HiOutlineTrash } from 'react-icons/hi';
 import { MdError, MdOutlineWarning } from 'react-icons/md';
 import { Link } from 'react-router-dom';
 import colors from '../../../colors';
@@ -160,16 +158,6 @@ class TopicList extends PageComponent {
         </Box>
         <Section>
           <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center' }}>
-            <Button
-              variant="solid"
-              colorScheme="brand"
-              onClick={() => this.showCreateTopicModal()}
-              style={{ minWidth: '160px', marginBottom: '12px' }}
-              data-testid="create-topic-button"
-            >
-              Create topic
-            </Button>
-
             <Checkbox
               data-testid="show-internal-topics-checkbox"
               isChecked={!uiSettings.topicList.hideInternalTopics}
@@ -280,26 +268,6 @@ const TopicsTable: FC<{ topics: Topic[]; onDelete: (record: Topic) => void }> = 
           header: 'Size',
           accessorKey: 'logDirSummary.totalSizeBytes',
           cell: ({ row: { original: topic } }) => renderLogDirSummary(topic.logDirSummary),
-        },
-        {
-          id: 'action',
-          header: '',
-          cell: ({ row: { original: record } }) => (
-            <Flex gap={1}>
-              <DeleteDisabledTooltip topic={record}>
-                <button
-                  type="button"
-                  data-testid={`delete-topic-button-${record.topicName}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onDelete(record);
-                  }}
-                >
-                  <Icon as={HiOutlineTrash} />
-                </button>
-              </DeleteDisabledTooltip>
-            </Flex>
-          ),
         },
       ]}
     />

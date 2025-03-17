@@ -9,21 +9,19 @@
  * by the Apache License, Version 2.0
  */
 
+import { LockIcon } from '@primer/octicons-react';
+import { Button, Code, Popover, Result, Tooltip } from '@redpanda-data/ui';
 import { computed, makeObservable, observable } from 'mobx';
 import { observer } from 'mobx-react';
 import React from 'react';
+import { MdOutlineWarningAmber } from 'react-icons/md';
+import { isServerless } from '../../../config';
 import { appGlobal } from '../../../state/appGlobal';
 import { api } from '../../../state/backendApi';
 import type { ConfigEntry, Topic, TopicAction } from '../../../state/restInterfaces';
 import { uiSettings } from '../../../state/ui';
 import { uiState } from '../../../state/uiState';
 import '../../../utils/arrayExtensions';
-import { LockIcon } from '@primer/octicons-react';
-import { Box, Button, Code, Flex, Popover, Result, Tooltip } from '@redpanda-data/ui';
-import { MdError, MdOutlineWarning, MdOutlineWarningAmber } from 'react-icons/md';
-import colors from '../../../colors';
-import { isServerless } from '../../../config';
-import { AppFeatures } from '../../../utils/env';
 import { DefaultSkeleton } from '../../../utils/tsxUtils';
 import PageContent from '../../misc/PageContent';
 import Section from '../../misc/Section';
@@ -31,14 +29,11 @@ import Tabs from '../../misc/tabs/Tabs';
 import { PageComponent, type PageInitHelper } from '../Page';
 import DeleteRecordsModal from './DeleteRecordsModal/DeleteRecordsModal';
 import { TopicQuickInfoStatistic } from './QuickInfo';
-import AclList from './Tab.Acl/AclList';
 import { TopicConfiguration } from './Tab.Config';
 import { TopicConsumers } from './Tab.Consumers';
-import { TopicDocumentation } from './Tab.Docu';
-import { DeleteRecordsMenuItem, TopicMessageView } from './Tab.Messages';
-import { TopicPartitions } from './Tab.Partitions';
+import { TopicMessageView } from './Tab.Messages';
 
-const TopicTabIds = ['messages', 'consumers', 'partitions', 'configuration', 'documentation', 'topicacl'] as const;
+const TopicTabIds = ['messages', 'consumers', 'configuration'] as const;
 export type TopicTabId = (typeof TopicTabIds)[number];
 
 // A tab (specifying title+content) that disable/lock itself if the user doesn't have some required permissions.
@@ -153,9 +148,6 @@ class TopicDetails extends PageComponent<{ topicName: string }> {
     // consumers are lazy loaded because they're (relatively) expensive
     if (uiSettings.topicDetailsActiveTabKey === 'consumers') api.refreshTopicConsumers(this.props.topicName, force);
 
-    // partitions are always required to display message count in the statistics bar
-    api.refreshPartitionsForTopic(this.props.topicName, force);
-
     // configuration is always required for the statistics bar
     api.refreshTopicConfig(this.props.topicName, force);
 
@@ -164,9 +156,6 @@ class TopicDetails extends PageComponent<{ topicName: string }> {
     // documentation can be lazy loaded
     if (uiSettings.topicDetailsActiveTabKey === 'documentation')
       api.refreshTopicDocumentation(this.props.topicName, force);
-
-    // ACL can be lazy loaded
-    if (uiSettings.topicDetailsActiveTabKey === 'topicacl') api.refreshTopicAcls(this.props.topicName, force);
   }
 
   @computed get topic(): undefined | Topic | null {
@@ -249,82 +238,10 @@ class TopicDetails extends PageComponent<{ topicName: string }> {
       ),
       new TopicTab(
         () => topic,
-        'partitions',
-        'viewPartitions',
-        <Flex gap={1}>
-          Partitions
-          {!!leaderLessPartitionIds && (
-            <Tooltip
-              placement="top"
-              hasArrow
-              label={`This topic has ${leaderLessPartitionIds.length} ${leaderLessPartitionIds.length === 1 ? 'a leaderless partition' : 'leaderless partitions'}`}
-            >
-              <Box>
-                <MdError size={18} color={colors.brandError} />
-              </Box>
-            </Tooltip>
-          )}
-          {!!underReplicatedPartitionIds && (
-            <Tooltip
-              placement="top"
-              hasArrow
-              label={`This topic has ${underReplicatedPartitionIds.length} ${underReplicatedPartitionIds.length === 1 ? 'an under-replicated partition' : 'under-replicated partitions'}`}
-            >
-              <Box>
-                <MdOutlineWarning size={18} color={colors.brandWarning} />
-              </Box>
-            </Tooltip>
-          )}
-        </Flex>,
-        (t) => <TopicPartitions topic={t} />,
-      ),
-      new TopicTab(
-        () => topic,
         'configuration',
         'viewConfig',
         'Configuration',
         (t) => <TopicConfiguration topic={t} />,
-      ),
-      new TopicTab(
-        () => topic,
-        'topicacl',
-        'seeTopic',
-        'ACL',
-        (t) => {
-          return <AclList acl={api.topicAcls.get(t.topicName)} />;
-        },
-        [
-          () => {
-            if (AppFeatures.SINGLE_SIGN_ON)
-              if (api.userData != null && !api.userData.canListAcls)
-                return (
-                  <Popover
-                    content={"You need the cluster-permission 'viewAcl' to view this tab"}
-                    hideCloseButton={true}
-                  >
-                    <div>
-                      {' '}
-                      <LockIcon size={16} /> ACL
-                    </div>
-                  </Popover>
-                );
-            return undefined;
-          },
-        ],
-      ),
-      new TopicTab(
-        () => topic,
-        'documentation',
-        'seeTopic',
-        'Documentation',
-        (t) => <TopicDocumentation topic={t} />,
-        [
-          (t) => (t.documentation === 'NOT_CONFIGURED' ? mkDocuTip('Topic documentation is not configured') : null),
-          (t) =>
-            t.documentation === 'NOT_EXISTENT'
-              ? mkDocuTip('Documentation for this topic was not found in the configured repository', warnIcon)
-              : null,
-        ],
       ),
     ];
 
@@ -332,21 +249,6 @@ class TopicDetails extends PageComponent<{ topicName: string }> {
       <>
         <PageContent key={'b'}>
           {uiSettings.topicDetailsShowStatisticsBar && <TopicQuickInfoStatistic topic={topic} />}
-
-          <Flex mb={4} gap={2}>
-            <Button
-              variant="outline"
-              onClick={() => {
-                appGlobal.history.push(`/topics/${encodeURIComponent(topic.topicName)}/produce-record`);
-              }}
-            >
-              Produce Record
-            </Button>
-            {DeleteRecordsMenuItem(topic.cleanupPolicy === 'compact', topic.allowedActions ?? [], () => {
-              return (this.deleteRecordsModalAlive = true);
-            })}
-          </Flex>
-
           {/* Tabs:  Messages, Configuration */}
           <Section>
             <Tabs
